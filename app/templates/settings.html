@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <div class="flex items-center justify-between mb-6">
+            <h1 class="text-2xl font-bold text-gray-800">Settings</h1>
+            <a href="/" class="text-blue-600 hover:text-blue-800 text-sm">Back to Scanner</a>
+        </div>
+
+        <form id="settingsForm" class="space-y-6">
+            <!-- Pages Per Scan -->
+            <div>
+                <label for="max_pages_per_scan" class="block text-sm font-medium text-gray-700 mb-2">
+                    Pages Per Scan Batch
+                </label>
+                <div class="flex items-center gap-4">
+                    <input
+                        type="number"
+                        id="max_pages_per_scan"
+                        name="max_pages_per_scan"
+                        min="10"
+                        max="10000"
+                        value="{{ settings.max_pages_per_scan }}"
+                        class="w-32 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    >
+                    <span class="text-sm text-gray-500">pages (10 - 10,000)</span>
+                </div>
+                <p class="mt-1 text-sm text-gray-500">Number of pages to scan before pausing. You can continue scanning after each batch.</p>
+            </div>
+
+            <!-- Request Timeout -->
+            <div>
+                <label for="request_timeout" class="block text-sm font-medium text-gray-700 mb-2">
+                    Request Timeout
+                </label>
+                <div class="flex items-center gap-4">
+                    <input
+                        type="number"
+                        id="request_timeout"
+                        name="request_timeout"
+                        min="5"
+                        max="120"
+                        value="{{ settings.request_timeout }}"
+                        class="w-32 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    >
+                    <span class="text-sm text-gray-500">seconds (5 - 120)</span>
+                </div>
+                <p class="mt-1 text-sm text-gray-500">How long to wait for each page to respond.</p>
+            </div>
+
+            <!-- Requests Per Second -->
+            <div>
+                <label for="requests_per_second" class="block text-sm font-medium text-gray-700 mb-2">
+                    Rate Limit
+                </label>
+                <div class="flex items-center gap-4">
+                    <input
+                        type="number"
+                        id="requests_per_second"
+                        name="requests_per_second"
+                        min="0.5"
+                        max="10"
+                        step="0.5"
+                        value="{{ settings.requests_per_second }}"
+                        class="w-32 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    >
+                    <span class="text-sm text-gray-500">requests/second (0.5 - 10)</span>
+                </div>
+                <p class="mt-1 text-sm text-gray-500">Maximum requests per second. Lower values are more polite to servers.</p>
+            </div>
+
+            <!-- Concurrent Requests -->
+            <div>
+                <label for="max_concurrent_requests" class="block text-sm font-medium text-gray-700 mb-2">
+                    Concurrent Requests
+                </label>
+                <div class="flex items-center gap-4">
+                    <input
+                        type="number"
+                        id="max_concurrent_requests"
+                        name="max_concurrent_requests"
+                        min="1"
+                        max="50"
+                        value="{{ settings.max_concurrent_requests }}"
+                        class="w-32 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    >
+                    <span class="text-sm text-gray-500">pages (1 - 50)</span>
+                </div>
+                <p class="mt-1 text-sm text-gray-500">Number of pages to scan simultaneously. Higher values are faster but use more resources.</p>
+            </div>
+
+            <!-- Default Crawl Depth -->
+            <div>
+                <label for="default_crawl_depth" class="block text-sm font-medium text-gray-700 mb-2">
+                    Default Crawl Depth
+                </label>
+                <div class="flex items-center gap-4">
+                    <input
+                        type="number"
+                        id="default_crawl_depth"
+                        name="default_crawl_depth"
+                        min="1"
+                        max="10"
+                        value="{{ settings.default_crawl_depth }}"
+                        class="w-32 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    >
+                    <span class="text-sm text-gray-500">levels (1 - 10)</span>
+                </div>
+                <p class="mt-1 text-sm text-gray-500">Default depth for "Follow Internal Links" option.</p>
+            </div>
+
+            <!-- Max Crawl Depth -->
+            <div>
+                <label for="max_crawl_depth" class="block text-sm font-medium text-gray-700 mb-2">
+                    Maximum Crawl Depth
+                </label>
+                <div class="flex items-center gap-4">
+                    <input
+                        type="number"
+                        id="max_crawl_depth"
+                        name="max_crawl_depth"
+                        min="1"
+                        max="10"
+                        value="{{ settings.max_crawl_depth }}"
+                        class="w-32 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    >
+                    <span class="text-sm text-gray-500">levels (1 - 10)</span>
+                </div>
+                <p class="mt-1 text-sm text-gray-500">Maximum depth users can select on the scan page.</p>
+            </div>
+
+            <!-- Buttons -->
+            <div class="flex gap-4 pt-4 border-t">
+                <button
+                    type="submit"
+                    class="flex-1 py-3 px-4 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 focus:ring-4 focus:ring-blue-300 transition"
+                >
+                    Save Settings
+                </button>
+                <button
+                    type="button"
+                    onclick="resetSettings()"
+                    class="py-3 px-4 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 focus:ring-4 focus:ring-gray-200 transition"
+                >
+                    Reset to Defaults
+                </button>
+            </div>
+        </form>
+
+        <!-- Status Message -->
+        <div id="statusMessage" class="mt-4 hidden">
+            <div class="p-3 rounded-lg text-sm"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.getElementById('settingsForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const form = e.target;
+        const data = {
+            max_pages_per_scan: parseInt(form.max_pages_per_scan.value),
+            request_timeout: parseInt(form.request_timeout.value),
+            requests_per_second: parseFloat(form.requests_per_second.value),
+            max_concurrent_requests: parseInt(form.max_concurrent_requests.value),
+            default_crawl_depth: parseInt(form.default_crawl_depth.value),
+            max_crawl_depth: parseInt(form.max_crawl_depth.value),
+        };
+
+        try {
+            const response = await fetch('/api/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                showStatus('Settings saved successfully!', 'success');
+                updateFormValues(result);
+            } else {
+                const error = await response.json();
+                showStatus('Error: ' + (error.detail || 'Failed to save settings'), 'error');
+            }
+        } catch (error) {
+            showStatus('Error: ' + error.message, 'error');
+        }
+    });
+
+    async function resetSettings() {
+        if (!confirm('Reset all settings to their default values?')) {
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/settings/reset', {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                showStatus('Settings reset to defaults!', 'success');
+                updateFormValues(result);
+            } else {
+                showStatus('Error: Failed to reset settings', 'error');
+            }
+        } catch (error) {
+            showStatus('Error: ' + error.message, 'error');
+        }
+    }
+
+    function updateFormValues(settings) {
+        document.getElementById('max_pages_per_scan').value = settings.max_pages_per_scan;
+        document.getElementById('request_timeout').value = settings.request_timeout;
+        document.getElementById('requests_per_second').value = settings.requests_per_second;
+        document.getElementById('max_concurrent_requests').value = settings.max_concurrent_requests;
+        document.getElementById('default_crawl_depth').value = settings.default_crawl_depth;
+        document.getElementById('max_crawl_depth').value = settings.max_crawl_depth;
+    }
+
+    function showStatus(message, type) {
+        const container = document.getElementById('statusMessage');
+        const inner = container.querySelector('div');
+
+        container.classList.remove('hidden');
+        inner.textContent = message;
+
+        if (type === 'success') {
+            inner.className = 'p-3 rounded-lg text-sm bg-green-100 text-green-800';
+        } else {
+            inner.className = 'p-3 rounded-lg text-sm bg-red-100 text-red-800';
+        }
+
+        setTimeout(() => {
+            container.classList.add('hidden');
+        }, 3000);
+    }
+</script>
+{% endblock %}

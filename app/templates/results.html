@@ -1,0 +1,1258 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">Found Documents</h1>
+            <p id="summaryText" class="text-gray-600 mt-1">Loading results...</p>
+        </div>
+        <a href="/" class="inline-flex items-center text-blue-600 hover:text-blue-700">
+            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+            </svg>
+            New Scan
+        </a>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loadingState" class="bg-white rounded-lg shadow-md p-8 text-center">
+        <div class="spinner mx-auto mb-4" style="width: 40px; height: 40px;"></div>
+        <p class="text-gray-600">Loading documents...</p>
+    </div>
+
+    <!-- Results Container -->
+    <div id="resultsContainer" class="hidden">
+        <!-- Continue Scanning Banner -->
+        <div id="continueBanner" class="hidden bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div class="flex items-center gap-2">
+                    <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <span class="text-amber-800">
+                        <span id="pagesRemainingText">More pages available</span>
+                    </span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button
+                        id="autoscanBtn"
+                        onclick="toggleAutoscan()"
+                        class="px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition flex items-center gap-2"
+                    >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                        <span id="autoscanBtnText">Autoscan</span>
+                    </button>
+                    <button
+                        id="continueBtn"
+                        onclick="continueScan()"
+                        class="px-4 py-2 bg-amber-600 text-white font-medium rounded-lg hover:bg-amber-700 transition flex items-center gap-2"
+                    >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        Continue Scanning
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls Bar -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <div class="flex flex-col lg:flex-row lg:items-center gap-4">
+                <!-- Search -->
+                <div class="flex-1">
+                    <input
+                        type="text"
+                        id="searchInput"
+                        placeholder="Search documents..."
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                        oninput="filterDocuments()"
+                    >
+                </div>
+
+                <!-- Selection Controls -->
+                <div class="flex items-center gap-2">
+                    <button onclick="selectAll()" class="px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition">
+                        Select All
+                    </button>
+                    <button onclick="deselectAll()" class="px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-lg transition">
+                        Deselect All
+                    </button>
+                    <span class="text-gray-400">|</span>
+                    <span id="selectionCount" class="text-sm text-gray-600">0 selected</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Document Grid (for <= 50 documents) -->
+        <div id="documentGrid" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <!-- Documents will be inserted here -->
+        </div>
+
+        <!-- Document List (for > 50 documents) -->
+        <div id="documentList" class="hidden bg-white rounded-lg shadow-md overflow-hidden">
+            <table class="w-full">
+                <thead class="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                        <th class="w-10 px-4 py-3 text-left">
+                            <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)" class="checkbox-custom">
+                        </th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Filename</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">Size</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell">Depth</th>
+                    </tr>
+                </thead>
+                <tbody id="documentListBody" class="divide-y divide-gray-200">
+                    <!-- Document rows will be inserted here -->
+                </tbody>
+            </table>
+
+            <!-- Pagination -->
+            <div id="pagination" class="px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
+                <div class="text-sm text-gray-500">
+                    Showing <span id="pageStart">1</span>-<span id="pageEnd">50</span> of <span id="totalDocs">0</span> documents
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="prevPage()" id="prevPageBtn" disabled class="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Previous
+                    </button>
+                    <span class="text-sm text-gray-600">Page <span id="currentPage">1</span> of <span id="totalPages">1</span></span>
+                    <button onclick="nextPage()" id="nextPageBtn" class="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Next
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- No Results Message -->
+        <div id="noResults" class="hidden bg-white rounded-lg shadow-md p-8 text-center">
+            <p class="text-gray-600">No documents found matching your search.</p>
+        </div>
+
+        <!-- Download Section -->
+        <div id="downloadSection" class="bg-white rounded-lg shadow-md p-6 mt-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">Download Selected Documents</h2>
+
+            <div class="space-y-4">
+                <!-- Download Path -->
+                <div>
+                    <label for="downloadPath" class="block text-sm font-medium text-gray-700 mb-2">
+                        Download Location
+                    </label>
+                    <div class="flex gap-2">
+                        <input
+                            type="text"
+                            id="downloadPath"
+                            placeholder="./downloads"
+                            value="./downloads"
+                            class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                        >
+                        <button
+                            onclick="validatePath()"
+                            class="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
+                        >
+                            Validate
+                        </button>
+                    </div>
+                    <p id="pathStatus" class="mt-1 text-sm text-gray-500"></p>
+                </div>
+
+                <!-- Download Size Info -->
+                <div id="downloadSizeInfo" class="hidden bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
+                    <div class="flex items-center justify-between">
+                        <span class="text-blue-800">
+                            <span id="selectedCount">0</span> files selected
+                        </span>
+                        <span class="font-medium text-blue-900">
+                            Total: <span id="totalDownloadSize">0 B</span>
+                        </span>
+                    </div>
+                    <div id="unknownSizeWarning" class="hidden mt-2">
+                        <div class="flex items-center justify-between">
+                            <span class="text-blue-600 text-xs">
+                                * Size unknown for <span id="unknownSizeCount">0</span> files
+                            </span>
+                            <button
+                                id="calculateSizesBtn"
+                                onclick="calculateSizes()"
+                                class="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition flex items-center gap-1"
+                            >
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                                </svg>
+                                <span id="calculateSizesBtnText">Calculate Sizes</span>
+                            </button>
+                        </div>
+                        <div id="calculateSizesProgress" class="hidden mt-2 space-y-1">
+                            <div class="flex justify-between text-xs text-blue-600">
+                                <span id="calculateSizesStatus">Calculating...</span>
+                                <span><span id="calculateSizesCompleted">0</span> / <span id="calculateSizesTotal">0</span></span>
+                            </div>
+                            <div class="h-1.5 bg-blue-200 rounded-full overflow-hidden">
+                                <div id="calculateSizesBar" class="h-full bg-blue-600 transition-all duration-150" style="width: 0%"></div>
+                            </div>
+                            <p id="calculateSizesCurrentFile" class="text-xs text-gray-500 truncate"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Download Button -->
+                <button
+                    id="downloadBtn"
+                    onclick="startDownload()"
+                    disabled
+                    class="w-full py-3 px-4 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 focus:ring-4 focus:ring-green-300 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                    </svg>
+                    <span id="downloadBtnText">Select documents to download</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Empty State -->
+    <div id="emptyState" class="hidden bg-white rounded-lg shadow-md p-8 text-center">
+        <svg class="w-16 h-16 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+        <h2 class="text-xl font-semibold text-gray-800 mb-2">No Documents Found</h2>
+        <p class="text-gray-600 mb-4">No downloadable documents were found on the scanned page(s).</p>
+        <a href="/" class="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+            Try Another URL
+        </a>
+    </div>
+
+    <!-- Download Progress Overlay -->
+    <div id="downloadOverlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">Downloading Files</h2>
+
+            <!-- Progress Bar -->
+            <div class="h-2 bg-gray-200 rounded-full overflow-hidden mb-4">
+                <div id="downloadProgressBar" class="h-full bg-green-600 transition-all duration-300" style="width: 0%"></div>
+            </div>
+
+            <!-- Current File -->
+            <p id="downloadCurrentFile" class="text-sm text-gray-600 mb-2 truncate">Preparing...</p>
+
+            <!-- Stats -->
+            <div class="flex justify-between text-sm text-gray-500 mb-4">
+                <span>Progress: <span id="downloadProgress" class="font-medium">0/0</span></span>
+                <span class="text-red-500">Failed: <span id="downloadFailed" class="font-medium">0</span></span>
+            </div>
+
+            <!-- Cancel/Close Button -->
+            <button
+                id="downloadOverlayBtn"
+                onclick="closeDownloadOverlay()"
+                class="w-full py-2 px-4 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition"
+            >
+                Cancel
+            </button>
+        </div>
+    </div>
+
+    <!-- Scan Summary Modal -->
+    <div id="scanSummaryModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-semibold text-gray-800">Scan Summary</h2>
+                <button onclick="closeScanSummary()" class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="space-y-3">
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+                    </svg>
+                    <div class="min-w-0">
+                        <p class="text-xs text-gray-500 uppercase tracking-wide">URL Scanned</p>
+                        <p id="summaryUrl" class="text-sm text-gray-800 break-all"></p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="bg-gray-50 rounded-lg p-3">
+                        <p class="text-xs text-gray-500 uppercase tracking-wide">Crawl Depth</p>
+                        <p id="summaryDepth" class="text-xl font-semibold text-gray-800"></p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-3">
+                        <p class="text-xs text-gray-500 uppercase tracking-wide">Pages Scanned</p>
+                        <p id="summaryPages" class="text-xl font-semibold text-gray-800"></p>
+                    </div>
+                    <div class="bg-green-50 rounded-lg p-3">
+                        <p class="text-xs text-green-600 uppercase tracking-wide">Documents Found</p>
+                        <p id="summaryDocs" class="text-xl font-semibold text-green-700"></p>
+                    </div>
+                    <div class="bg-blue-50 rounded-lg p-3">
+                        <p class="text-xs text-blue-600 uppercase tracking-wide">Total Time</p>
+                        <p id="summaryTime" class="text-xl font-semibold text-blue-700"></p>
+                    </div>
+                </div>
+
+                <div id="summaryMorePages" class="hidden bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+                    <span id="summaryRemaining"></span> more pages available to scan
+                </div>
+            </div>
+
+            <button
+                onclick="closeScanSummary()"
+                class="w-full mt-4 py-2 px-4 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition"
+            >
+                View Documents
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const sessionId = '{{ session_id }}';
+    let allDocuments = [];
+    let filteredDocuments = [];
+    let selectedDocuments = new Set();
+    let downloadEventSource = null;
+    let hasMorePages = false;
+    let pagesRemaining = 0;
+    let autoscanEnabled = false;
+
+    // Pagination settings
+    const GRID_THRESHOLD = 50;
+    const ITEMS_PER_PAGE = 50;
+    let currentPage = 1;
+    let useListView = false;
+
+    // Time estimation
+    let scanStartTime = null;
+    let lastPagesScanned = 0;
+
+    // Track if summary has been shown this session
+    let summaryShown = sessionStorage.getItem(`summary_shown_${sessionId}`) === 'true';
+
+    // Load results on page load
+    document.addEventListener('DOMContentLoaded', loadResults);
+
+    async function loadResults() {
+        try {
+            const response = await fetch(`/api/scrape/results/${sessionId}`);
+            if (!response.ok) throw new Error('Failed to load results');
+
+            const data = await response.json();
+            allDocuments = data.documents || [];
+            hasMorePages = data.has_more_pages || false;
+            pagesRemaining = data.pages_remaining || 0;
+
+            document.getElementById('loadingState').classList.add('hidden');
+
+            if (allDocuments.length === 0 && !hasMorePages) {
+                document.getElementById('emptyState').classList.remove('hidden');
+                return;
+            }
+
+            document.getElementById('resultsContainer').classList.remove('hidden');
+            updateSummaryText(data);
+
+            // Initialize lastPagesScanned for accurate ETA calculation
+            lastPagesScanned = data.pages_scanned || 0;
+
+            // Show continue banner if there are more pages
+            if (hasMorePages) {
+                document.getElementById('continueBanner').classList.remove('hidden');
+                document.getElementById('pagesRemainingText').textContent =
+                    `${pagesRemaining} more page${pagesRemaining !== 1 ? 's' : ''} to scan`;
+            }
+
+            renderDocuments(allDocuments);
+
+            // Show scan summary modal on first load
+            if (!summaryShown && allDocuments.length > 0) {
+                showScanSummary();
+            }
+
+        } catch (error) {
+            console.error('Error loading results:', error);
+            document.getElementById('loadingState').innerHTML = `
+                <p class="text-red-600">Failed to load results. <a href="/" class="text-blue-600 hover:underline">Try again</a></p>
+            `;
+        }
+    }
+
+    function updateSummaryText(data) {
+        let text = `Found ${allDocuments.length} document${allDocuments.length !== 1 ? 's' : ''} across ${data.pages_scanned} page${data.pages_scanned !== 1 ? 's' : ''}`;
+        if (data.has_more_pages) {
+            text += ` (${data.pages_remaining} more pages available)`;
+        }
+        document.getElementById('summaryText').textContent = text;
+    }
+
+    async function showScanSummary() {
+        try {
+            const response = await fetch(`/api/scrape/summary/${sessionId}`);
+            if (!response.ok) return;
+
+            const summary = await response.json();
+
+            // Populate modal
+            document.getElementById('summaryUrl').textContent = summary.url;
+
+            // Show depth based on crawl option
+            if (summary.crawl_option === 'single') {
+                document.getElementById('summaryDepth').textContent = 'Single page';
+            } else {
+                document.getElementById('summaryDepth').textContent = `${summary.max_depth} levels`;
+            }
+
+            document.getElementById('summaryPages').textContent = summary.pages_scanned.toLocaleString();
+            document.getElementById('summaryDocs').textContent = summary.documents_found.toLocaleString();
+
+            // Format duration
+            if (summary.duration_seconds != null) {
+                document.getElementById('summaryTime').textContent = formatDuration(summary.duration_seconds);
+            } else {
+                document.getElementById('summaryTime').textContent = '-';
+            }
+
+            // Show more pages warning if applicable
+            if (summary.has_more_pages && summary.pages_remaining > 0) {
+                document.getElementById('summaryMorePages').classList.remove('hidden');
+                document.getElementById('summaryRemaining').textContent = summary.pages_remaining.toLocaleString();
+            }
+
+            // Show modal
+            document.getElementById('scanSummaryModal').classList.remove('hidden');
+
+            // Mark as shown
+            summaryShown = true;
+            sessionStorage.setItem(`summary_shown_${sessionId}`, 'true');
+
+        } catch (error) {
+            console.error('Error loading scan summary:', error);
+        }
+    }
+
+    function closeScanSummary() {
+        document.getElementById('scanSummaryModal').classList.add('hidden');
+    }
+
+    function formatDuration(seconds) {
+        if (seconds < 60) {
+            return `${Math.round(seconds)}s`;
+        } else if (seconds < 3600) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.round(seconds % 60);
+            return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+        } else {
+            const hours = Math.floor(seconds / 3600);
+            const mins = Math.round((seconds % 3600) / 60);
+            return `${hours}h ${mins}m`;
+        }
+    }
+
+    function formatTimeEstimate(seconds) {
+        if (!seconds || seconds < 0 || !isFinite(seconds)) return 'Calculating...';
+        if (seconds < 60) return `${Math.round(seconds)}s`;
+        if (seconds < 3600) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.round(seconds % 60);
+            return `${mins}m ${secs}s`;
+        }
+        const hours = Math.floor(seconds / 3600);
+        const mins = Math.round((seconds % 3600) / 60);
+        return `${hours}h ${mins}m`;
+    }
+
+    function calculateETA(pagesScanned, pagesRemaining, startTime) {
+        if (!startTime || pagesScanned <= lastPagesScanned) return null;
+        const elapsed = (Date.now() - startTime) / 1000; // seconds
+        const pagesThisBatch = pagesScanned - lastPagesScanned;
+        if (pagesThisBatch <= 0) return null;
+        const pagesPerSecond = pagesThisBatch / elapsed;
+        if (pagesPerSecond <= 0) return null;
+        return pagesRemaining / pagesPerSecond;
+    }
+
+    async function continueScan() {
+        const continueBtn = document.getElementById('continueBtn');
+        continueBtn.disabled = true;
+        continueBtn.innerHTML = `
+            <div class="spinner" style="width: 16px; height: 16px; border-width: 2px;"></div>
+            Continuing...
+        `;
+
+        try {
+            // Start continuation
+            const response = await fetch(`/api/scrape/continue/${sessionId}`, {
+                method: 'POST'
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to continue scan');
+            }
+
+            // Initialize time tracking for this batch
+            scanStartTime = Date.now();
+            // lastPagesScanned is set from previous batch
+
+            // Show progress overlay
+            showContinueProgress();
+
+            // Connect to SSE for progress
+            const eventSource = new EventSource(`/api/scrape/progress/${sessionId}`);
+
+            eventSource.addEventListener('progress', (e) => {
+                const data = JSON.parse(e.data);
+                document.getElementById('continueProgressStatus').textContent = data.message || 'Scanning...';
+                document.getElementById('continuePagesScanned').textContent = data.pages_scanned;
+                document.getElementById('continueDocsFound').textContent = data.documents_found;
+
+                // Update pages remaining in real-time
+                if (data.total_pages_queued !== undefined) {
+                    pagesRemaining = data.total_pages_queued;
+                    document.getElementById('pagesRemainingText').textContent =
+                        `${pagesRemaining.toLocaleString()} more page${pagesRemaining !== 1 ? 's' : ''} to scan`;
+
+                    // Calculate and display ETA
+                    const eta = calculateETA(data.pages_scanned, pagesRemaining, scanStartTime);
+                    const etaEl = document.getElementById('continueETA');
+                    if (etaEl && eta !== null) {
+                        etaEl.textContent = `ETA: ${formatTimeEstimate(eta)}`;
+                    }
+
+                    // Also update remaining in the overlay
+                    const remainingEl = document.getElementById('continueRemaining');
+                    if (remainingEl) {
+                        remainingEl.textContent = `${pagesRemaining.toLocaleString()} pages remaining`;
+                    }
+                }
+            });
+
+            eventSource.addEventListener('complete', (e) => {
+                eventSource.close();
+                const data = JSON.parse(e.data);
+
+                // Update local state
+                allDocuments = data.documents || [];
+                hasMorePages = data.has_more_pages || false;
+                pagesRemaining = data.pages_remaining || 0;
+
+                // Save pages scanned for next batch ETA calculation
+                lastPagesScanned = data.pages_scanned || 0;
+
+                // Hide progress overlay
+                document.getElementById('continueOverlay').classList.add('hidden');
+
+                // Update UI
+                updateSummaryText(data);
+                renderDocuments(allDocuments);
+
+                // Update continue banner
+                if (hasMorePages) {
+                    document.getElementById('pagesRemainingText').textContent =
+                        `${pagesRemaining} more page${pagesRemaining !== 1 ? 's' : ''} to scan`;
+                    resetContinueBtn();
+
+                    // Auto-continue if autoscan is enabled
+                    if (autoscanEnabled) {
+                        setTimeout(() => continueScan(), 500);
+                    }
+                } else {
+                    document.getElementById('continueBanner').classList.add('hidden');
+                    // Stop autoscan when no more pages
+                    if (autoscanEnabled) {
+                        stopAutoscan();
+                    }
+                    // Show final scan summary when complete
+                    showScanSummary();
+                }
+
+                // Selection state is preserved in selectedDocuments Set
+                // and re-applied during render
+                updateSelectionUI();
+            });
+
+            eventSource.addEventListener('error', (e) => {
+                eventSource.close();
+                document.getElementById('continueOverlay').classList.add('hidden');
+                resetContinueBtn();
+                stopAutoscan();
+                alert('An error occurred while scanning.');
+            });
+
+            eventSource.onerror = () => {
+                if (eventSource.readyState === EventSource.CLOSED) {
+                    eventSource.close();
+                    document.getElementById('continueOverlay').classList.add('hidden');
+                    resetContinueBtn();
+                    stopAutoscan();
+                    alert('Connection lost. Please try again.');
+                }
+            };
+
+        } catch (error) {
+            console.error('Error:', error);
+            alert(error.message || 'Failed to continue scan');
+            resetContinueBtn();
+        }
+    }
+
+    function resetContinueBtn() {
+        const continueBtn = document.getElementById('continueBtn');
+        continueBtn.disabled = false;
+        continueBtn.innerHTML = `
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            Continue Scanning
+        `;
+    }
+
+    function toggleAutoscan() {
+        autoscanEnabled = !autoscanEnabled;
+        const btn = document.getElementById('autoscanBtn');
+        const btnText = document.getElementById('autoscanBtnText');
+
+        if (autoscanEnabled) {
+            btn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+            btn.classList.add('bg-red-600', 'hover:bg-red-700');
+            btnText.textContent = 'Stop Autoscan';
+            // Start scanning immediately if there are more pages
+            if (hasMorePages) {
+                continueScan();
+            }
+        } else {
+            btn.classList.remove('bg-red-600', 'hover:bg-red-700');
+            btn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+            btnText.textContent = 'Autoscan';
+        }
+    }
+
+    function stopAutoscan() {
+        autoscanEnabled = false;
+        const btn = document.getElementById('autoscanBtn');
+        const btnText = document.getElementById('autoscanBtnText');
+        btn.classList.remove('bg-red-600', 'hover:bg-red-700');
+        btn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+        btnText.textContent = 'Autoscan';
+    }
+
+    function showContinueProgress() {
+        // Create and show overlay if not exists
+        let overlay = document.getElementById('continueOverlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'continueOverlay';
+            overlay.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+            overlay.innerHTML = `
+                <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+                    <h2 class="text-lg font-semibold text-gray-800 mb-4">Continuing Scan</h2>
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="spinner" style="width: 24px; height: 24px;"></div>
+                        <p id="continueProgressStatus" class="text-sm text-gray-600">Scanning...</p>
+                    </div>
+                    <div class="space-y-2 text-sm text-gray-500">
+                        <div class="flex justify-between">
+                            <span>Pages scanned: <span id="continuePagesScanned" class="font-medium">0</span></span>
+                            <span>Documents found: <span id="continueDocsFound" class="font-medium text-green-600">0</span></span>
+                        </div>
+                        <div class="flex justify-between text-amber-600">
+                            <span id="continueRemaining">${pagesRemaining.toLocaleString()} pages remaining</span>
+                            <span id="continueETA" class="font-medium">ETA: Calculating...</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+        } else {
+            overlay.classList.remove('hidden');
+            // Update the remaining count when showing
+            const remainingEl = document.getElementById('continueRemaining');
+            if (remainingEl) {
+                remainingEl.textContent = `${pagesRemaining.toLocaleString()} pages remaining`;
+            }
+            const etaEl = document.getElementById('continueETA');
+            if (etaEl) {
+                etaEl.textContent = 'ETA: Calculating...';
+            }
+        }
+    }
+
+    function renderDocuments(documents) {
+        filteredDocuments = documents;
+        useListView = documents.length > GRID_THRESHOLD;
+
+        const grid = document.getElementById('documentGrid');
+        const list = document.getElementById('documentList');
+
+        if (documents.length === 0) {
+            grid.classList.add('hidden');
+            list.classList.add('hidden');
+            document.getElementById('noResults').classList.remove('hidden');
+            return;
+        }
+
+        document.getElementById('noResults').classList.add('hidden');
+
+        if (useListView) {
+            // Use paginated list view
+            grid.classList.add('hidden');
+            list.classList.remove('hidden');
+            currentPage = 1;
+            renderListPage();
+        } else {
+            // Use grid view
+            list.classList.add('hidden');
+            grid.classList.remove('hidden');
+            grid.innerHTML = '';
+            documents.forEach((doc, index) => {
+                const card = createDocumentCard(doc, index);
+                grid.appendChild(card);
+            });
+        }
+    }
+
+    function renderListPage() {
+        const tbody = document.getElementById('documentListBody');
+        tbody.innerHTML = '';
+
+        const totalPages = Math.ceil(filteredDocuments.length / ITEMS_PER_PAGE);
+        const start = (currentPage - 1) * ITEMS_PER_PAGE;
+        const end = Math.min(start + ITEMS_PER_PAGE, filteredDocuments.length);
+        const pageDocuments = filteredDocuments.slice(start, end);
+
+        pageDocuments.forEach((doc, index) => {
+            const row = createDocumentRow(doc, start + index);
+            tbody.appendChild(row);
+        });
+
+        // Update pagination UI
+        document.getElementById('pageStart').textContent = start + 1;
+        document.getElementById('pageEnd').textContent = end;
+        document.getElementById('totalDocs').textContent = filteredDocuments.length;
+        document.getElementById('currentPage').textContent = currentPage;
+        document.getElementById('totalPages').textContent = totalPages;
+
+        document.getElementById('prevPageBtn').disabled = currentPage <= 1;
+        document.getElementById('nextPageBtn').disabled = currentPage >= totalPages;
+
+        // Update select all checkbox state
+        updateSelectAllCheckbox();
+    }
+
+    function createDocumentRow(doc, index) {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-gray-50 cursor-pointer';
+        tr.dataset.index = index;
+        tr.dataset.url = doc.url;
+
+        const isSelected = selectedDocuments.has(doc.url);
+        if (isSelected) {
+            tr.classList.add('bg-blue-50');
+        }
+
+        const extClass = getExtensionClass(doc.extension);
+
+        tr.innerHTML = `
+            <td class="px-4 py-3">
+                <input
+                    type="checkbox"
+                    class="checkbox-custom"
+                    ${isSelected ? 'checked' : ''}
+                    onchange="toggleDocument('${doc.url}', this)"
+                    onclick="event.stopPropagation()"
+                >
+            </td>
+            <td class="px-4 py-3">
+                <span class="px-2 py-0.5 text-xs font-medium ${extClass} rounded uppercase">
+                    ${doc.extension.replace('.', '')}
+                </span>
+            </td>
+            <td class="px-4 py-3">
+                <div class="flex flex-col">
+                    <span class="text-sm font-medium text-gray-800 truncate max-w-md" title="${doc.filename}">${doc.filename}</span>
+                    ${!doc.is_accessible ? `<span class="text-xs text-red-500">${doc.error_message || 'Not accessible'}</span>` : ''}
+                </div>
+            </td>
+            <td class="px-4 py-3 text-sm text-gray-500 hidden sm:table-cell">${doc.file_size_display || '-'}</td>
+            <td class="px-4 py-3 text-sm text-gray-500 hidden md:table-cell">${doc.depth}</td>
+        `;
+
+        tr.addEventListener('click', (e) => {
+            if (e.target.type !== 'checkbox') {
+                const checkbox = tr.querySelector('input[type="checkbox"]');
+                checkbox.checked = !checkbox.checked;
+                toggleDocument(doc.url, checkbox);
+            }
+        });
+
+        return tr;
+    }
+
+    function prevPage() {
+        if (currentPage > 1) {
+            currentPage--;
+            renderListPage();
+        }
+    }
+
+    function nextPage() {
+        const totalPages = Math.ceil(filteredDocuments.length / ITEMS_PER_PAGE);
+        if (currentPage < totalPages) {
+            currentPage++;
+            renderListPage();
+        }
+    }
+
+    function toggleSelectAll(checkbox) {
+        const start = (currentPage - 1) * ITEMS_PER_PAGE;
+        const end = Math.min(start + ITEMS_PER_PAGE, filteredDocuments.length);
+        const pageDocuments = filteredDocuments.slice(start, end);
+
+        pageDocuments.forEach(doc => {
+            if (checkbox.checked) {
+                selectedDocuments.add(doc.url);
+            } else {
+                selectedDocuments.delete(doc.url);
+            }
+        });
+
+        renderListPage();
+        updateSelectionUI();
+    }
+
+    function updateSelectAllCheckbox() {
+        const checkbox = document.getElementById('selectAllCheckbox');
+        if (!checkbox) return;
+
+        const start = (currentPage - 1) * ITEMS_PER_PAGE;
+        const end = Math.min(start + ITEMS_PER_PAGE, filteredDocuments.length);
+        const pageDocuments = filteredDocuments.slice(start, end);
+
+        const allSelected = pageDocuments.every(doc => selectedDocuments.has(doc.url));
+        const someSelected = pageDocuments.some(doc => selectedDocuments.has(doc.url));
+
+        checkbox.checked = allSelected;
+        checkbox.indeterminate = someSelected && !allSelected;
+    }
+
+    function createDocumentCard(doc, index) {
+        const div = document.createElement('div');
+        div.className = 'bg-white rounded-lg shadow-sm border border-gray-200 p-4 hover:shadow-md transition cursor-pointer';
+        div.dataset.index = index;
+        div.dataset.url = doc.url;
+
+        const isSelected = selectedDocuments.has(doc.url);
+        if (isSelected) {
+            div.classList.add('ring-2', 'ring-blue-500', 'border-blue-500');
+        }
+
+        const extClass = getExtensionClass(doc.extension);
+
+        div.innerHTML = `
+            <div class="flex items-start gap-3">
+                <input
+                    type="checkbox"
+                    class="checkbox-custom mt-1"
+                    ${isSelected ? 'checked' : ''}
+                    onchange="toggleDocument('${doc.url}', this)"
+                    onclick="event.stopPropagation()"
+                >
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="px-2 py-0.5 text-xs font-medium ${extClass} rounded uppercase">
+                            ${doc.extension.replace('.', '')}
+                        </span>
+                        ${doc.file_size_display ? `<span class="text-xs text-gray-500">${doc.file_size_display}</span>` : ''}
+                    </div>
+                    <h3 class="text-sm font-medium text-gray-800 truncate" title="${doc.filename}">
+                        ${doc.filename}
+                    </h3>
+                    ${!doc.is_accessible ? `<p class="text-xs text-red-500 mt-1">${doc.error_message || 'Not accessible'}</p>` : ''}
+                </div>
+            </div>
+        `;
+
+        div.addEventListener('click', (e) => {
+            if (e.target.type !== 'checkbox') {
+                const checkbox = div.querySelector('input[type="checkbox"]');
+                checkbox.checked = !checkbox.checked;
+                toggleDocument(doc.url, checkbox);
+            }
+        });
+
+        return div;
+    }
+
+    function getExtensionClass(ext) {
+        const classes = {
+            '.pdf': 'bg-red-100 text-red-700',
+            '.doc': 'bg-blue-100 text-blue-700',
+            '.docx': 'bg-blue-100 text-blue-700',
+            '.xls': 'bg-green-100 text-green-700',
+            '.xlsx': 'bg-green-100 text-green-700',
+            '.ppt': 'bg-orange-100 text-orange-700',
+            '.pptx': 'bg-orange-100 text-orange-700',
+            '.txt': 'bg-gray-100 text-gray-700',
+            '.csv': 'bg-emerald-100 text-emerald-700',
+            '.zip': 'bg-yellow-100 text-yellow-700',
+            '.rar': 'bg-yellow-100 text-yellow-700',
+        };
+        return classes[ext.toLowerCase()] || 'bg-purple-100 text-purple-700';
+    }
+
+    function toggleDocument(url, checkbox) {
+        const element = checkbox.closest('[data-url]');
+
+        if (checkbox.checked) {
+            selectedDocuments.add(url);
+            if (useListView) {
+                element.classList.add('bg-blue-50');
+            } else {
+                element.classList.add('ring-2', 'ring-blue-500', 'border-blue-500');
+            }
+        } else {
+            selectedDocuments.delete(url);
+            if (useListView) {
+                element.classList.remove('bg-blue-50');
+            } else {
+                element.classList.remove('ring-2', 'ring-blue-500', 'border-blue-500');
+            }
+        }
+
+        if (useListView) {
+            updateSelectAllCheckbox();
+        }
+        updateSelectionUI();
+    }
+
+    function selectAll() {
+        // Select all filtered documents (not just visible)
+        filteredDocuments.forEach(doc => {
+            selectedDocuments.add(doc.url);
+        });
+
+        if (useListView) {
+            renderListPage();
+        } else {
+            document.querySelectorAll('#documentGrid [data-url]').forEach(card => {
+                card.querySelector('input[type="checkbox"]').checked = true;
+                card.classList.add('ring-2', 'ring-blue-500', 'border-blue-500');
+            });
+        }
+        updateSelectionUI();
+    }
+
+    function deselectAll() {
+        selectedDocuments.clear();
+
+        if (useListView) {
+            renderListPage();
+        } else {
+            document.querySelectorAll('#documentGrid [data-url]').forEach(card => {
+                card.querySelector('input[type="checkbox"]').checked = false;
+                card.classList.remove('ring-2', 'ring-blue-500', 'border-blue-500');
+            });
+        }
+        updateSelectionUI();
+    }
+
+    function updateSelectionUI() {
+        const count = selectedDocuments.size;
+        document.getElementById('selectionCount').textContent = `${count} selected`;
+
+        const btn = document.getElementById('downloadBtn');
+        const btnText = document.getElementById('downloadBtnText');
+        const sizeInfo = document.getElementById('downloadSizeInfo');
+        const selectedCountEl = document.getElementById('selectedCount');
+        const totalSizeEl = document.getElementById('totalDownloadSize');
+        const unknownWarning = document.getElementById('unknownSizeWarning');
+
+        if (count > 0) {
+            btn.disabled = false;
+            btnText.textContent = `Download ${count} file${count !== 1 ? 's' : ''}`;
+
+            // Calculate total size
+            let totalBytes = 0;
+            let unknownCount = 0;
+
+            allDocuments.forEach(doc => {
+                if (selectedDocuments.has(doc.url)) {
+                    if (doc.file_size_bytes != null) {
+                        totalBytes += doc.file_size_bytes;
+                    } else {
+                        unknownCount++;
+                    }
+                }
+            });
+
+            // Show size info
+            sizeInfo.classList.remove('hidden');
+            selectedCountEl.textContent = count;
+            totalSizeEl.textContent = formatFileSize(totalBytes);
+
+            if (unknownCount > 0) {
+                unknownWarning.classList.remove('hidden');
+                document.getElementById('unknownSizeCount').textContent = unknownCount;
+            } else {
+                unknownWarning.classList.add('hidden');
+            }
+        } else {
+            btn.disabled = true;
+            btnText.textContent = 'Select documents to download';
+            sizeInfo.classList.add('hidden');
+        }
+    }
+
+    function formatFileSize(bytes) {
+        if (bytes === 0) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        const size = bytes / Math.pow(1024, i);
+        return `${size.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+    }
+
+    async function calculateSizes() {
+        // Get URLs of selected files with unknown sizes
+        const urlsToCalculate = [];
+        allDocuments.forEach(doc => {
+            if (selectedDocuments.has(doc.url) && doc.file_size_bytes == null) {
+                urlsToCalculate.push(doc.url);
+            }
+        });
+
+        if (urlsToCalculate.length === 0) {
+            return;
+        }
+
+        // Update UI elements
+        const btn = document.getElementById('calculateSizesBtn');
+        const btnText = document.getElementById('calculateSizesBtnText');
+        const progressDiv = document.getElementById('calculateSizesProgress');
+        const progressBar = document.getElementById('calculateSizesBar');
+        const statusEl = document.getElementById('calculateSizesStatus');
+        const completedEl = document.getElementById('calculateSizesCompleted');
+        const totalEl = document.getElementById('calculateSizesTotal');
+        const currentFileEl = document.getElementById('calculateSizesCurrentFile');
+
+        btn.disabled = true;
+        btn.classList.add('hidden');
+        progressDiv.classList.remove('hidden');
+        progressBar.style.width = '0%';
+        statusEl.textContent = 'Starting...';
+        completedEl.textContent = '0';
+        totalEl.textContent = urlsToCalculate.length;
+        currentFileEl.textContent = '';
+
+        try {
+            const response = await fetch(`/api/scrape/calculate-sizes/${sessionId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ urls: urlsToCalculate })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to calculate sizes');
+            }
+
+            // Read SSE stream
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalData = null;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // Keep incomplete line in buffer
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+
+                            if (data.completed !== undefined) {
+                                // Progress update
+                                const percent = (data.completed / data.total) * 100;
+                                progressBar.style.width = `${percent}%`;
+                                completedEl.textContent = data.completed;
+                                statusEl.textContent = `${data.known_count} sizes found (${data.total_display})`;
+                                currentFileEl.textContent = data.current_url;
+                            }
+
+                            if (data.files !== undefined) {
+                                // Complete event
+                                finalData = data;
+                            }
+                        } catch (e) {
+                            // Ignore parse errors
+                        }
+                    }
+                }
+            }
+
+            if (finalData) {
+                progressBar.style.width = '100%';
+
+                // Update document sizes in allDocuments
+                finalData.files.forEach(result => {
+                    const doc = allDocuments.find(d => d.url === result.url);
+                    if (doc && result.size_bytes != null) {
+                        doc.file_size_bytes = result.size_bytes;
+                        doc.file_size_display = result.size_display;
+                    }
+                });
+
+                // Re-render to show updated sizes
+                renderDocuments(filteredDocuments.length > 0 ? filteredDocuments : allDocuments);
+                updateSelectionUI();
+
+                // Show result
+                if (finalData.unknown_count > 0) {
+                    statusEl.textContent = `Done: ${finalData.known_count} found, ${finalData.unknown_count} unknown`;
+                } else {
+                    statusEl.textContent = `Done: All ${finalData.known_count} sizes calculated!`;
+                    setTimeout(() => {
+                        document.getElementById('unknownSizeWarning').classList.add('hidden');
+                    }, 2000);
+                }
+                currentFileEl.textContent = `Total: ${finalData.total_display}`;
+            }
+
+        } catch (error) {
+            console.error('Error calculating sizes:', error);
+            statusEl.textContent = 'Calculation failed';
+        } finally {
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.classList.remove('hidden');
+                progressDiv.classList.add('hidden');
+                progressBar.style.width = '0%';
+            }, 3000);
+        }
+    }
+
+    function filterDocuments() {
+        const query = document.getElementById('searchInput').value.toLowerCase();
+        const filtered = allDocuments.filter(doc =>
+            doc.filename.toLowerCase().includes(query) ||
+            doc.extension.toLowerCase().includes(query)
+        );
+        currentPage = 1;
+        renderDocuments(filtered);
+    }
+
+    async function validatePath() {
+        const path = document.getElementById('downloadPath').value;
+        const statusEl = document.getElementById('pathStatus');
+
+        try {
+            const response = await fetch('/api/download/validate-path', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path })
+            });
+
+            const data = await response.json();
+
+            if (data.valid) {
+                statusEl.textContent = data.message;
+                statusEl.className = 'mt-1 text-sm text-green-600';
+            } else {
+                statusEl.textContent = data.message;
+                statusEl.className = 'mt-1 text-sm text-red-600';
+            }
+        } catch (error) {
+            statusEl.textContent = 'Failed to validate path';
+            statusEl.className = 'mt-1 text-sm text-red-600';
+        }
+    }
+
+    async function startDownload() {
+        if (selectedDocuments.size === 0) return;
+
+        const downloadPath = document.getElementById('downloadPath').value;
+
+        try {
+            const response = await fetch('/api/download/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: sessionId,
+                    document_urls: Array.from(selectedDocuments),
+                    download_path: downloadPath
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                alert(error.detail || 'Failed to start download');
+                return;
+            }
+
+            const data = await response.json();
+            const downloadSessionId = data.session_id;
+
+            // Show overlay
+            document.getElementById('downloadOverlay').classList.remove('hidden');
+            document.getElementById('downloadProgressBar').style.width = '0%';
+            document.getElementById('downloadCurrentFile').textContent = 'Starting download...';
+            document.getElementById('downloadProgress').textContent = `0/${selectedDocuments.size}`;
+            document.getElementById('downloadFailed').textContent = '0';
+            document.getElementById('downloadOverlayBtn').textContent = 'Cancel';
+
+            // Connect to SSE
+            downloadEventSource = new EventSource(`/api/download/progress/${downloadSessionId}`);
+
+            downloadEventSource.addEventListener('downloading', (e) => {
+                const data = JSON.parse(e.data);
+                const percent = (data.current_file_index / data.total_files) * 100;
+                document.getElementById('downloadProgressBar').style.width = `${percent}%`;
+                document.getElementById('downloadCurrentFile').textContent = `Downloading: ${data.current_file}`;
+                document.getElementById('downloadProgress').textContent = `${data.files_completed}/${data.total_files}`;
+                document.getElementById('downloadFailed').textContent = data.files_failed;
+            });
+
+            downloadEventSource.addEventListener('complete', (e) => {
+                const data = JSON.parse(e.data);
+                downloadEventSource.close();
+                document.getElementById('downloadProgressBar').style.width = '100%';
+                document.getElementById('downloadCurrentFile').textContent = data.message;
+                document.getElementById('downloadOverlayBtn').textContent = 'Close';
+            });
+
+            downloadEventSource.addEventListener('error', (e) => {
+                downloadEventSource.close();
+                document.getElementById('downloadCurrentFile').textContent = 'Download failed';
+                document.getElementById('downloadOverlayBtn').textContent = 'Close';
+            });
+
+        } catch (error) {
+            console.error('Error:', error);
+            alert('Failed to start download');
+        }
+    }
+
+    function closeDownloadOverlay() {
+        if (downloadEventSource) {
+            downloadEventSource.close();
+            downloadEventSource = null;
+        }
+        document.getElementById('downloadOverlay').classList.add('hidden');
+    }
+</script>
+{% endblock %}

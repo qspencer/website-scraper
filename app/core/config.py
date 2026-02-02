@@ -1,0 +1,26 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env")
+
+    APP_NAME: str = "Document Scraper"
+    DEBUG: bool = False
+
+    # Scraping settings
+    REQUEST_TIMEOUT: int = 30
+    MAX_CONCURRENT_REQUESTS: int = 10
+    DEFAULT_CRAWL_DEPTH: int = 2
+    MAX_CRAWL_DEPTH: int = 5
+    MAX_PAGES_TO_SCAN: int = 500  # Pages per batch (can continue scanning)
+    USER_AGENT: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    # Rate limiting (requests per second)
+    REQUESTS_PER_SECOND: float = 2.0
+
+    # Download settings
+    DEFAULT_DOWNLOAD_DIR: str = "./downloads"
+    MAX_FILE_SIZE_MB: int = 100
+
+
+settings = Settings()

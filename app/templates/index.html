@@ -1,0 +1,346 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <div class="flex items-center justify-between mb-6">
+            <h1 class="text-2xl font-bold text-gray-800">Scan Website for Documents</h1>
+            <a href="/settings" class="text-gray-500 hover:text-gray-700" title="Settings">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+            </a>
+        </div>
+
+        <form id="scrapeForm" class="space-y-6">
+            <!-- URL Input -->
+            <div>
+                <label for="url" class="block text-sm font-medium text-gray-700 mb-2">
+                    Website URL
+                </label>
+                <div class="relative">
+                    <input
+                        type="url"
+                        id="url"
+                        name="url"
+                        required
+                        placeholder="https://example.com/documents"
+                        list="urlHistory"
+                        autocomplete="off"
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                    >
+                    <datalist id="urlHistory"></datalist>
+                </div>
+                <p class="mt-1 text-sm text-gray-500">Enter the URL of the page to scan for documents</p>
+            </div>
+
+            <!-- Document Type Filter -->
+            <div>
+                <label for="documentFilter" class="block text-sm font-medium text-gray-700 mb-2">
+                    Document Types
+                </label>
+                <select
+                    id="documentFilter"
+                    name="document_type_filter"
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition bg-white"
+                >
+                    {% for option in filter_options %}
+                    <option value="{{ option.value }}" {% if option.value == default_filter %}selected{% endif %}>
+                        {{ option.label }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Crawl Depth Options -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-3">
+                    Scan Depth
+                </label>
+                <div class="space-y-3">
+                    <label class="flex items-center cursor-pointer">
+                        <input
+                            type="radio"
+                            name="crawl_option"
+                            value="single"
+                            checked
+                            class="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                            onchange="toggleDepthSlider()"
+                        >
+                        <span class="ml-3 text-gray-700">Single page only</span>
+                    </label>
+                    <div class="flex items-center gap-4">
+                        <label class="flex items-center cursor-pointer">
+                            <input
+                                type="radio"
+                                name="crawl_option"
+                                value="follow"
+                                class="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                                onchange="toggleDepthSlider()"
+                            >
+                            <span class="ml-3 text-gray-700">Follow internal links <span id="depthDisplay" class="text-blue-600 hidden">(depth: <span id="depthDisplayValue">{{ default_depth }}</span>)</span></span>
+                        </label>
+                        <!-- Inline depth control -->
+                        <div id="depthControlInline" class="items-center gap-2" style="display: none;">
+                            <button type="button" onclick="adjustDepth(-1)" class="w-7 h-7 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium transition">-</button>
+                            <input
+                                type="number"
+                                id="maxDepth"
+                                name="max_depth"
+                                min="1"
+                                max="{{ max_depth }}"
+                                value="{{ default_depth }}"
+                                class="w-12 text-center border border-gray-300 rounded py-1 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                                oninput="updateDepthDisplay()"
+                            >
+                            <button type="button" onclick="adjustDepth(1)" class="w-7 h-7 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium transition">+</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Submit Button -->
+            <button
+                type="submit"
+                id="submitBtn"
+                class="w-full py-3 px-4 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 focus:ring-4 focus:ring-blue-300 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+                <span id="btnText">Start Scanning</span>
+                <div id="btnSpinner" class="spinner hidden"></div>
+            </button>
+        </form>
+    </div>
+
+    <!-- Progress Overlay -->
+    <div id="progressOverlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">Scanning Website</h2>
+
+            <!-- Progress Bar -->
+            <div class="h-2 bg-gray-200 rounded-full overflow-hidden mb-4">
+                <div id="progressBar" class="h-full bg-blue-600 transition-all duration-300" style="width: 0%"></div>
+            </div>
+
+            <!-- Status Text -->
+            <p id="progressStatus" class="text-sm text-gray-600 mb-2">Initializing...</p>
+
+            <!-- Stats -->
+            <div class="flex justify-between text-sm text-gray-500 mb-4">
+                <span>Pages: <span id="pagesScanned" class="font-medium">0</span></span>
+                <span>Documents: <span id="documentsFound" class="font-medium text-green-600">0</span></span>
+            </div>
+
+            <!-- Cancel Button -->
+            <button
+                id="cancelBtn"
+                onclick="cancelScrape()"
+                class="w-full py-2 px-4 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition"
+            >
+                Cancel
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const URL_HISTORY_KEY = 'scraper_url_history';
+    const MAX_URL_HISTORY = 5;
+
+    // Load URL history on page load
+    document.addEventListener('DOMContentLoaded', loadUrlHistory);
+
+    function loadUrlHistory() {
+        const history = getUrlHistory();
+        const datalist = document.getElementById('urlHistory');
+        datalist.innerHTML = '';
+
+        history.forEach(url => {
+            const option = document.createElement('option');
+            option.value = url;
+            datalist.appendChild(option);
+        });
+    }
+
+    function getUrlHistory() {
+        try {
+            const history = localStorage.getItem(URL_HISTORY_KEY);
+            return history ? JSON.parse(history) : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function saveUrlToHistory(url) {
+        try {
+            let history = getUrlHistory();
+
+            // Remove if already exists (to move it to front)
+            history = history.filter(u => u !== url);
+
+            // Add to front
+            history.unshift(url);
+
+            // Keep only last 5
+            history = history.slice(0, MAX_URL_HISTORY);
+
+            localStorage.setItem(URL_HISTORY_KEY, JSON.stringify(history));
+            loadUrlHistory();
+        } catch (e) {
+            console.error('Failed to save URL history:', e);
+        }
+    }
+
+    function toggleDepthSlider() {
+        const followRadio = document.querySelector('input[name="crawl_option"][value="follow"]');
+        const isFollow = followRadio.checked;
+
+        document.getElementById('depthControlInline').style.display = isFollow ? 'flex' : 'none';
+        document.getElementById('depthDisplay').classList.toggle('hidden', !isFollow);
+
+        if (isFollow) {
+            updateDepthDisplay();
+        }
+    }
+
+    function adjustDepth(delta) {
+        const input = document.getElementById('maxDepth');
+        const newValue = parseInt(input.value) + delta;
+        const min = parseInt(input.min);
+        const max = parseInt(input.max);
+
+        if (newValue >= min && newValue <= max) {
+            input.value = newValue;
+            updateDepthDisplay();
+        }
+    }
+
+    function updateDepthDisplay() {
+        const value = document.getElementById('maxDepth').value;
+        document.getElementById('depthDisplayValue').textContent = value;
+    }
+
+    let currentSessionId = null;
+    let eventSource = null;
+
+    document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const form = e.target;
+        const submitBtn = document.getElementById('submitBtn');
+        const btnText = document.getElementById('btnText');
+        const btnSpinner = document.getElementById('btnSpinner');
+
+        // Disable button
+        submitBtn.disabled = true;
+        btnText.textContent = 'Starting...';
+        btnSpinner.classList.remove('hidden');
+
+        try {
+            // Start scrape
+            const response = await fetch('/api/scrape/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: form.url.value,
+                    document_type_filter: form.document_type_filter.value,
+                    crawl_option: form.crawl_option.value,
+                    max_depth: parseInt(form.max_depth.value)
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to start scraping');
+            }
+
+            const data = await response.json();
+            currentSessionId = data.session_id;
+
+            // Save URL to history
+            saveUrlToHistory(form.url.value);
+
+            // Show progress overlay
+            document.getElementById('progressOverlay').classList.remove('hidden');
+            document.getElementById('progressBar').style.width = '0%';
+            document.getElementById('progressStatus').textContent = 'Starting scan...';
+            document.getElementById('pagesScanned').textContent = '0';
+            document.getElementById('documentsFound').textContent = '0';
+
+            // Connect to SSE
+            eventSource = new EventSource(`/api/scrape/progress/${currentSessionId}`);
+
+            eventSource.addEventListener('progress', (e) => {
+                const data = JSON.parse(e.data);
+                document.getElementById('progressStatus').textContent = data.message || 'Scanning...';
+                document.getElementById('pagesScanned').textContent = data.pages_scanned;
+                document.getElementById('documentsFound').textContent = data.documents_found;
+
+                // Animate progress bar (indeterminate since we don't know total)
+                const bar = document.getElementById('progressBar');
+                const current = parseFloat(bar.style.width) || 0;
+                bar.style.width = Math.min(current + 5, 90) + '%';
+            });
+
+            eventSource.addEventListener('complete', (e) => {
+                const data = JSON.parse(e.data);
+                eventSource.close();
+
+                document.getElementById('progressBar').style.width = '100%';
+                document.getElementById('progressStatus').textContent = 'Complete!';
+
+                // Redirect to results page
+                setTimeout(() => {
+                    window.location.href = `/results/${currentSessionId}`;
+                }, 500);
+            });
+
+            eventSource.addEventListener('error', (e) => {
+                // This is a server-sent error event with a message
+                const data = JSON.parse(e.data);
+                eventSource.close();
+                resetForm();
+                alert('Scan error: ' + (data.message || 'Unknown error'));
+            });
+
+            eventSource.addEventListener('cancelled', (e) => {
+                eventSource.close();
+                resetForm();
+            });
+
+            // Handle connection errors (different from server-sent 'error' events)
+            eventSource.onerror = (e) => {
+                if (eventSource.readyState === EventSource.CLOSED) {
+                    eventSource.close();
+                    resetForm();
+                    alert('Connection lost. The server may have restarted. Please try again.');
+                }
+            };
+
+        } catch (error) {
+            console.error('Error:', error);
+            alert('Failed to start scanning. Please try again.');
+            resetForm();
+        }
+    });
+
+    function cancelScrape() {
+        if (currentSessionId && eventSource) {
+            eventSource.close();
+            fetch(`/api/scrape/cancel/${currentSessionId}`, { method: 'DELETE' });
+        }
+        resetForm();
+    }
+
+    function resetForm() {
+        document.getElementById('progressOverlay').classList.add('hidden');
+        const submitBtn = document.getElementById('submitBtn');
+        const btnText = document.getElementById('btnText');
+        const btnSpinner = document.getElementById('btnSpinner');
+        submitBtn.disabled = false;
+        btnText.textContent = 'Start Scanning';
+        btnSpinner.classList.add('hidden');
+        currentSessionId = null;
+        eventSource = null;
+    }
+</script>
+{% endblock %}
