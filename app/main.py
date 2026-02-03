@@ -12,7 +12,7 @@ from app.api.routes import scraper, downloads, settings as settings_routes
 from app.services.settings_service import runtime_settings
 
 # Initialize logging
-setup_logging(level="DEBUG" if settings.DEBUG else "INFO")
+setup_logging(level=settings.LOG_LEVEL)
 logger = get_logger(__name__)
 
 

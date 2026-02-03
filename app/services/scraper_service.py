@@ -1,4 +1,5 @@
 import asyncio
+import os
 import aiohttp
 from bs4 import BeautifulSoup
 from typing import List, Optional, Set, Tuple
@@ -19,6 +20,31 @@ from app.services.browser_service import fetch_page_with_browser
 
 logger = get_logger(__name__)
 inaccessible_logger = get_inaccessible_docs_logger()
+
+# Track URLs already logged as inaccessible to avoid duplicate log entries
+_logged_inaccessible_urls: set = set()
+
+
+def log_inaccessible(reason: str, url: str) -> None:
+    """Log an inaccessible URL, skipping duplicates."""
+    if url not in _logged_inaccessible_urls:
+        _logged_inaccessible_urls.add(url)
+        inaccessible_logger.info(f"{reason} | {url}")
+
+
+def clear_inaccessible_log_cache() -> None:
+    """Clear the inaccessible URL cache and log file (call at start of new scan)."""
+    _logged_inaccessible_urls.clear()
+
+    # Clear the log file
+    log_file = os.path.join("logs", "inaccessible_documents.log")
+    if os.path.exists(log_file):
+        try:
+            # Truncate the file
+            open(log_file, 'w').close()
+            logger.debug("Cleared inaccessible documents log file")
+        except Exception as e:
+            logger.warning(f"Failed to clear inaccessible log file: {e}")
 
 
 class ScraperService:
@@ -177,7 +203,9 @@ class ScraperService:
                             doc_info.file_size_bytes = size_bytes
                             doc_info.file_size_display = format_file_size(size_bytes)
                         except ValueError:
-                            logger.debug(f"Invalid Content-Length for {url}: {content_length}")
+                            logger.info(f"SIZE UNKNOWN (invalid Content-Length) | {url}")
+                    else:
+                        logger.info(f"SIZE UNKNOWN (no Content-Length header) | {url}")
 
                     # Update filename from Content-Disposition if available
                     content_disp = response.headers.get("Content-Disposition", "")
@@ -195,15 +223,18 @@ class ScraperService:
                     doc_info.is_accessible = False
                     doc_info.error_message = f"HTTP {response.status}"
                     logger.debug(f"File not accessible: {url} (HTTP {response.status})")
+                    log_inaccessible(f"HTTP {response.status}", url)
 
         except asyncio.TimeoutError:
             doc_info.is_accessible = False
             doc_info.error_message = "Timeout"
             logger.debug(f"Timeout getting file info: {url}")
+            log_inaccessible("TIMEOUT", url)
         except Exception as e:
             doc_info.is_accessible = False
             doc_info.error_message = str(e)[:50]
             logger.debug(f"Error getting file info for {url}: {e}")
+            log_inaccessible(f"ERROR: {str(e)[:100]}", url)
 
         return doc_info
 
@@ -244,13 +275,13 @@ class ScraperService:
                 else:
                     logger.info(f"Unexpected status {response.status} for size check: {url}")
                     # Log to dedicated inaccessible docs file
-                    inaccessible_logger.info(f"HTTP {response.status} | {url}")
+                    log_inaccessible(f"HTTP {response.status}", url)
         except asyncio.TimeoutError:
             logger.info(f"Timeout getting file size: {url}")
-            inaccessible_logger.info(f"TIMEOUT | {url}")
+            log_inaccessible("TIMEOUT", url)
         except Exception as e:
             logger.info(f"Error getting file size for {url}: {e}")
-            inaccessible_logger.info(f"ERROR: {e} | {url}")
+            log_inaccessible(f"ERROR: {e}", url)
 
         return None
 

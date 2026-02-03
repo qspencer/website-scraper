@@ -5,7 +5,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
 
     APP_NAME: str = "Document Scraper"
-    DEBUG: bool = False
+    DEBUG: bool = True  # Set to False in production
+    LOG_LEVEL: str = "DEBUG"  # DEBUG for development, INFO or WARNING for production
 
     # Scraping settings
     REQUEST_TIMEOUT: int = 30

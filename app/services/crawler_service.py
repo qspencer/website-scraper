@@ -8,7 +8,7 @@ from app.core.constants import DocumentTypeFilter, CrawlDepthOption
 from app.core.logging_config import get_logger
 from app.schemas.document import DocumentInfo
 from app.schemas.scrape import ScrapeProgress, ScrapeResult
-from app.services.scraper_service import scraper_service
+from app.services.scraper_service import scraper_service, clear_inaccessible_log_cache
 from app.services.settings_service import runtime_settings
 from app.utils.url_utils import (
     get_domain, is_internal_link, normalize_url,
@@ -133,6 +133,8 @@ class CrawlerService:
         # Create state if not provided
         if state is None:
             state = CrawlState()
+            # Clear the inaccessible URL log cache for a fresh scan
+            clear_inaccessible_log_cache()
 
         # Determine if this is a continuation (state has pending pages from previous batch)
         is_continuation = len(state.pending_queue) > 0

@@ -133,3 +133,119 @@ class TestIsJavascriptRedirect:
 
     def test_none_html(self, scraper):
         assert scraper.is_javascript_redirect(None) is False
+
+
+class TestInaccessibleLogging:
+    """Tests for inaccessible URL logging functions."""
+
+    def test_log_inaccessible_deduplication(self, tmp_path, monkeypatch):
+        """Test that duplicate URLs are not logged twice."""
+        from app.services import scraper_service
+
+        # Clear cache first
+        scraper_service.clear_inaccessible_log_cache()
+
+        # Track logged messages
+        logged_messages = []
+
+        def mock_log_info(msg):
+            logged_messages.append(msg)
+
+        # Patch the logger
+        monkeypatch.setattr(scraper_service.inaccessible_logger, 'info', mock_log_info)
+
+        # Log same URL twice
+        scraper_service.log_inaccessible("HTTP 404", "https://example.com/file.pdf")
+        scraper_service.log_inaccessible("HTTP 404", "https://example.com/file.pdf")
+
+        # Should only be logged once
+        assert len(logged_messages) == 1
+        assert "https://example.com/file.pdf" in logged_messages[0]
+
+    def test_log_inaccessible_different_urls(self, monkeypatch):
+        """Test that different URLs are both logged."""
+        from app.services import scraper_service
+
+        # Clear cache first
+        scraper_service.clear_inaccessible_log_cache()
+
+        logged_messages = []
+
+        def mock_log_info(msg):
+            logged_messages.append(msg)
+
+        monkeypatch.setattr(scraper_service.inaccessible_logger, 'info', mock_log_info)
+
+        # Log different URLs
+        scraper_service.log_inaccessible("HTTP 404", "https://example.com/file1.pdf")
+        scraper_service.log_inaccessible("HTTP 403", "https://example.com/file2.pdf")
+
+        # Both should be logged
+        assert len(logged_messages) == 2
+
+    def test_clear_inaccessible_log_cache_clears_memory(self, monkeypatch):
+        """Test that clearing cache allows same URL to be logged again."""
+        from app.services import scraper_service
+
+        logged_messages = []
+
+        def mock_log_info(msg):
+            logged_messages.append(msg)
+
+        monkeypatch.setattr(scraper_service.inaccessible_logger, 'info', mock_log_info)
+
+        # Log a URL
+        scraper_service.clear_inaccessible_log_cache()
+        scraper_service.log_inaccessible("HTTP 404", "https://example.com/file.pdf")
+
+        # Clear and log again
+        scraper_service.clear_inaccessible_log_cache()
+        scraper_service.log_inaccessible("HTTP 404", "https://example.com/file.pdf")
+
+        # Should be logged twice (once before clear, once after)
+        assert len(logged_messages) == 2
+
+    def test_clear_inaccessible_log_cache_truncates_file(self, tmp_path, monkeypatch):
+        """Test that clearing cache also truncates the log file."""
+        import os
+        from app.services import scraper_service
+
+        # Create a temporary log file
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        log_file = log_dir / "inaccessible_documents.log"
+        log_file.write_text("Some existing content\n")
+
+        # Patch os.path.join to use our temp path
+        original_join = os.path.join
+
+        def mock_join(*args):
+            if args == ("logs", "inaccessible_documents.log"):
+                return str(log_file)
+            return original_join(*args)
+
+        monkeypatch.setattr(os.path, 'join', mock_join)
+
+        # Clear cache (should truncate file)
+        scraper_service.clear_inaccessible_log_cache()
+
+        # File should be empty
+        assert log_file.read_text() == ""
+
+    def test_log_message_format(self, monkeypatch):
+        """Test that log messages have correct format."""
+        from app.services import scraper_service
+
+        scraper_service.clear_inaccessible_log_cache()
+
+        logged_messages = []
+
+        def mock_log_info(msg):
+            logged_messages.append(msg)
+
+        monkeypatch.setattr(scraper_service.inaccessible_logger, 'info', mock_log_info)
+
+        scraper_service.log_inaccessible("HTTP 404", "https://example.com/file.pdf")
+
+        assert len(logged_messages) == 1
+        assert "HTTP 404 | https://example.com/file.pdf" == logged_messages[0]

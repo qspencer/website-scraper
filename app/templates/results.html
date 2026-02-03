@@ -75,6 +75,20 @@
                     >
                 </div>
 
+                <!-- Filter Toggle -->
+                <div class="flex items-center gap-2">
+                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            id="hideInaccessible"
+                            class="checkbox-custom"
+                            onchange="filterDocuments()"
+                            checked
+                        >
+                        <span class="text-sm text-gray-600">Hide inaccessible</span>
+                    </label>
+                </div>
+
                 <!-- Selection Controls -->
                 <div class="flex items-center gap-2">
                     <button onclick="selectAll()" class="px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition">
@@ -119,12 +133,18 @@
                     Showing <span id="pageStart">1</span>-<span id="pageEnd">50</span> of <span id="totalDocs">0</span> documents
                 </div>
                 <div class="flex items-center gap-2">
+                    <button onclick="firstPage()" id="firstPageBtn" disabled class="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed" title="First page">
+                        &laquo;
+                    </button>
                     <button onclick="prevPage()" id="prevPageBtn" disabled class="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed">
                         Previous
                     </button>
                     <span class="text-sm text-gray-600">Page <span id="currentPage">1</span> of <span id="totalPages">1</span></span>
                     <button onclick="nextPage()" id="nextPageBtn" class="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed">
                         Next
+                    </button>
+                    <button onclick="lastPage()" id="lastPageBtn" disabled class="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed" title="Last page">
+                        &raquo;
                     </button>
                 </div>
             </div>
@@ -173,10 +193,15 @@
                             Total: <span id="totalDownloadSize">0 B</span>
                         </span>
                     </div>
+                    <div id="inaccessibleWarning" class="hidden mt-2">
+                        <span class="text-red-600 text-xs">
+                            * <span id="inaccessibleCount">0</span> files are inaccessible and cannot be downloaded
+                        </span>
+                    </div>
                     <div id="unknownSizeWarning" class="hidden mt-2">
                         <div class="flex items-center justify-between">
                             <span class="text-blue-600 text-xs">
-                                * Size unknown for <span id="unknownSizeCount">0</span> files
+                                * Size unknown for <span id="unknownSizeCount">0</span> accessible files
                             </span>
                             <button
                                 id="calculateSizesBtn"
@@ -373,7 +398,7 @@
                     `${pagesRemaining} more page${pagesRemaining !== 1 ? 's' : ''} to scan`;
             }
 
-            renderDocuments(allDocuments);
+            filterDocuments();  // Apply filters (including hide inaccessible)
 
             // Show scan summary modal on first load
             if (!summaryShown && allDocuments.length > 0) {
@@ -427,6 +452,8 @@
             if (summary.has_more_pages && summary.pages_remaining > 0) {
                 document.getElementById('summaryMorePages').classList.remove('hidden');
                 document.getElementById('summaryRemaining').textContent = summary.pages_remaining.toLocaleString();
+            } else {
+                document.getElementById('summaryMorePages').classList.add('hidden');
             }
 
             // Show modal
@@ -482,13 +509,24 @@
         return pagesRemaining / pagesPerSecond;
     }
 
-    async function continueScan() {
+    const MAX_RETRIES = 5;
+    const INITIAL_RETRY_DELAY = 2000; // 2 seconds
+
+    async function continueScan(retryCount = 0) {
         const continueBtn = document.getElementById('continueBtn');
         continueBtn.disabled = true;
-        continueBtn.innerHTML = `
-            <div class="spinner" style="width: 16px; height: 16px; border-width: 2px;"></div>
-            Continuing...
-        `;
+
+        if (retryCount > 0) {
+            continueBtn.innerHTML = `
+                <div class="spinner" style="width: 16px; height: 16px; border-width: 2px;"></div>
+                Retrying (${retryCount}/${MAX_RETRIES})...
+            `;
+        } else {
+            continueBtn.innerHTML = `
+                <div class="spinner" style="width: 16px; height: 16px; border-width: 2px;"></div>
+                Continuing...
+            `;
+        }
 
         try {
             // Start continuation
@@ -555,7 +593,7 @@
 
                 // Update UI
                 updateSummaryText(data);
-                renderDocuments(allDocuments);
+                filterDocuments();  // Apply filters (including hide inaccessible)
 
                 // Update continue banner
                 if (hasMorePages) {
@@ -582,7 +620,11 @@
                 updateSelectionUI();
             });
 
+            let sseRetryCount = 0;
+            const MAX_SSE_RETRIES = 3;
+
             eventSource.addEventListener('error', (e) => {
+                // Server-sent error event (different from connection error)
                 eventSource.close();
                 document.getElementById('continueOverlay').classList.add('hidden');
                 resetContinueBtn();
@@ -593,17 +635,53 @@
             eventSource.onerror = () => {
                 if (eventSource.readyState === EventSource.CLOSED) {
                     eventSource.close();
-                    document.getElementById('continueOverlay').classList.add('hidden');
-                    resetContinueBtn();
-                    stopAutoscan();
-                    alert('Connection lost. Please try again.');
+
+                    // Retry SSE connection
+                    if (sseRetryCount < MAX_SSE_RETRIES) {
+                        sseRetryCount++;
+                        const delay = 2000 * sseRetryCount;
+                        console.log(`SSE connection lost, retrying in ${delay}ms (attempt ${sseRetryCount}/${MAX_SSE_RETRIES})`);
+                        document.getElementById('continueProgressStatus').textContent = `Connection lost, retrying (${sseRetryCount}/${MAX_SSE_RETRIES})...`;
+
+                        setTimeout(() => {
+                            document.getElementById('continueOverlay').classList.add('hidden');
+                            continueScan(0); // Restart the scan continuation
+                        }, delay);
+                    } else {
+                        document.getElementById('continueOverlay').classList.add('hidden');
+                        resetContinueBtn();
+                        stopAutoscan();
+                        alert('Connection lost after multiple retries. Please check the server and try again.');
+                    }
                 }
             };
 
         } catch (error) {
             console.error('Error:', error);
-            alert(error.message || 'Failed to continue scan');
-            resetContinueBtn();
+
+            // Check if it's a network error (server down)
+            const isNetworkError = error.message === 'Failed to fetch' ||
+                                   error.name === 'TypeError' ||
+                                   error.message.includes('NetworkError');
+
+            if (isNetworkError && retryCount < MAX_RETRIES) {
+                const delay = INITIAL_RETRY_DELAY * Math.pow(2, retryCount); // Exponential backoff
+                console.log(`Network error, retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+
+                continueBtn.innerHTML = `
+                    <div class="spinner" style="width: 16px; height: 16px; border-width: 2px;"></div>
+                    Retry in ${Math.round(delay/1000)}s...
+                `;
+
+                setTimeout(() => continueScan(retryCount + 1), delay);
+            } else if (isNetworkError) {
+                alert('Server is unavailable. Please check if the server is running and try again.');
+                resetContinueBtn();
+                stopAutoscan();
+            } else {
+                alert(error.message || 'Failed to continue scan');
+                resetContinueBtn();
+            }
         }
     }
 
@@ -744,8 +822,10 @@
         document.getElementById('currentPage').textContent = currentPage;
         document.getElementById('totalPages').textContent = totalPages;
 
+        document.getElementById('firstPageBtn').disabled = currentPage <= 1;
         document.getElementById('prevPageBtn').disabled = currentPage <= 1;
         document.getElementById('nextPageBtn').disabled = currentPage >= totalPages;
+        document.getElementById('lastPageBtn').disabled = currentPage >= totalPages;
 
         // Update select all checkbox state
         updateSelectAllCheckbox();
@@ -811,6 +891,21 @@
         const totalPages = Math.ceil(filteredDocuments.length / ITEMS_PER_PAGE);
         if (currentPage < totalPages) {
             currentPage++;
+            renderListPage();
+        }
+    }
+
+    function firstPage() {
+        if (currentPage > 1) {
+            currentPage = 1;
+            renderListPage();
+        }
+    }
+
+    function lastPage() {
+        const totalPages = Math.ceil(filteredDocuments.length / ITEMS_PER_PAGE);
+        if (currentPage < totalPages) {
+            currentPage = totalPages;
             renderListPage();
         }
     }
@@ -978,6 +1073,7 @@
         const selectedCountEl = document.getElementById('selectedCount');
         const totalSizeEl = document.getElementById('totalDownloadSize');
         const unknownWarning = document.getElementById('unknownSizeWarning');
+        const inaccessibleWarning = document.getElementById('inaccessibleWarning');
 
         if (count > 0) {
             btn.disabled = false;
@@ -986,12 +1082,17 @@
             // Calculate total size
             let totalBytes = 0;
             let unknownCount = 0;
+            let inaccessibleCount = 0;
 
             allDocuments.forEach(doc => {
                 if (selectedDocuments.has(doc.url)) {
                     if (doc.file_size_bytes != null) {
                         totalBytes += doc.file_size_bytes;
+                    } else if (doc.is_accessible === false) {
+                        // Inaccessible files - don't count as "unknown size"
+                        inaccessibleCount++;
                     } else {
+                        // Accessible but size unknown
                         unknownCount++;
                     }
                 }
@@ -1002,6 +1103,15 @@
             selectedCountEl.textContent = count;
             totalSizeEl.textContent = formatFileSize(totalBytes);
 
+            // Show inaccessible warning
+            if (inaccessibleCount > 0) {
+                inaccessibleWarning.classList.remove('hidden');
+                document.getElementById('inaccessibleCount').textContent = inaccessibleCount;
+            } else {
+                inaccessibleWarning.classList.add('hidden');
+            }
+
+            // Show unknown size warning (only for accessible files)
             if (unknownCount > 0) {
                 unknownWarning.classList.remove('hidden');
                 document.getElementById('unknownSizeCount').textContent = unknownCount;
@@ -1012,6 +1122,8 @@
             btn.disabled = true;
             btnText.textContent = 'Select documents to download';
             sizeInfo.classList.add('hidden');
+            inaccessibleWarning.classList.add('hidden');
+            unknownWarning.classList.add('hidden');
         }
     }
 
@@ -1024,10 +1136,10 @@
     }
 
     async function calculateSizes() {
-        // Get URLs of selected files with unknown sizes
+        // Get URLs of selected accessible files with unknown sizes
         const urlsToCalculate = [];
         allDocuments.forEach(doc => {
-            if (selectedDocuments.has(doc.url) && doc.file_size_bytes == null) {
+            if (selectedDocuments.has(doc.url) && doc.file_size_bytes == null && doc.is_accessible !== false) {
                 urlsToCalculate.push(doc.url);
             }
         });
@@ -1117,8 +1229,8 @@
                     }
                 });
 
-                // Re-render to show updated sizes
-                renderDocuments(filteredDocuments.length > 0 ? filteredDocuments : allDocuments);
+                // Re-render to show updated sizes (maintains current filters)
+                filterDocuments();
                 updateSelectionUI();
 
                 // Show result
@@ -1148,10 +1260,19 @@
 
     function filterDocuments() {
         const query = document.getElementById('searchInput').value.toLowerCase();
-        const filtered = allDocuments.filter(doc =>
-            doc.filename.toLowerCase().includes(query) ||
-            doc.extension.toLowerCase().includes(query)
-        );
+        const hideInaccessible = document.getElementById('hideInaccessible').checked;
+
+        const filtered = allDocuments.filter(doc => {
+            // Filter by search query
+            const matchesSearch = doc.filename.toLowerCase().includes(query) ||
+                                  doc.extension.toLowerCase().includes(query);
+
+            // Filter by accessibility
+            const matchesAccessibility = !hideInaccessible || doc.is_accessible !== false;
+
+            return matchesSearch && matchesAccessibility;
+        });
+
         currentPage = 1;
         renderDocuments(filtered);
     }
@@ -1232,6 +1353,8 @@
                 downloadEventSource.close();
                 document.getElementById('downloadProgressBar').style.width = '100%';
                 document.getElementById('downloadCurrentFile').textContent = data.message;
+                document.getElementById('downloadProgress').textContent = `${data.files_completed}/${data.total_files}`;
+                document.getElementById('downloadFailed').textContent = data.files_failed;
                 document.getElementById('downloadOverlayBtn').textContent = 'Close';
             });
 

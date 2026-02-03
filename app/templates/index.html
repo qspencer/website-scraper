@@ -116,26 +116,26 @@
     <div id="progressOverlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
         <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
             <h2 class="text-lg font-semibold text-gray-800 mb-4">Scanning Website</h2>
-
-            <!-- Progress Bar -->
-            <div class="h-2 bg-gray-200 rounded-full overflow-hidden mb-4">
-                <div id="progressBar" class="h-full bg-blue-600 transition-all duration-300" style="width: 0%"></div>
+            <div class="flex items-center gap-3 mb-4">
+                <div class="spinner" style="width: 24px; height: 24px;"></div>
+                <p id="progressStatus" class="text-sm text-gray-600">Initializing...</p>
             </div>
-
-            <!-- Status Text -->
-            <p id="progressStatus" class="text-sm text-gray-600 mb-2">Initializing...</p>
-
-            <!-- Stats -->
-            <div class="flex justify-between text-sm text-gray-500 mb-4">
-                <span>Pages: <span id="pagesScanned" class="font-medium">0</span></span>
-                <span>Documents: <span id="documentsFound" class="font-medium text-green-600">0</span></span>
+            <div class="space-y-2 text-sm text-gray-500">
+                <div class="flex justify-between">
+                    <span>Pages scanned: <span id="pagesScanned" class="font-medium">0</span></span>
+                    <span>Documents found: <span id="documentsFound" class="font-medium text-green-600">0</span></span>
+                </div>
+                <div id="etaRow" class="flex justify-between text-amber-600 hidden">
+                    <span id="pagesRemaining">0 pages remaining</span>
+                    <span id="scanETA" class="font-medium">ETA: Calculating...</span>
+                </div>
             </div>
 
             <!-- Cancel Button -->
             <button
                 id="cancelBtn"
                 onclick="cancelScrape()"
-                class="w-full py-2 px-4 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition"
+                class="w-full mt-4 py-2 px-4 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition"
             >
                 Cancel
             </button>
@@ -222,6 +222,30 @@
 
     let currentSessionId = null;
     let eventSource = null;
+    let scanStartTime = null;
+    let lastPagesScanned = 0;
+
+    function formatTimeEstimate(seconds) {
+        if (!seconds || seconds < 0 || !isFinite(seconds)) return 'Calculating...';
+        if (seconds < 60) return `${Math.round(seconds)}s`;
+        if (seconds < 3600) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.round(seconds % 60);
+            return `${mins}m ${secs}s`;
+        }
+        const hours = Math.floor(seconds / 3600);
+        const mins = Math.round((seconds % 3600) / 60);
+        return `${hours}h ${mins}m`;
+    }
+
+    function calculateETA(pagesScanned, pagesRemaining, startTime) {
+        if (!startTime || pagesScanned <= 0) return null;
+        const elapsed = (Date.now() - startTime) / 1000; // seconds
+        if (pagesScanned <= 0) return null;
+        const pagesPerSecond = pagesScanned / elapsed;
+        if (pagesPerSecond <= 0) return null;
+        return pagesRemaining / pagesPerSecond;
+    }
 
     document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -261,10 +285,14 @@
 
             // Show progress overlay
             document.getElementById('progressOverlay').classList.remove('hidden');
-            document.getElementById('progressBar').style.width = '0%';
             document.getElementById('progressStatus').textContent = 'Starting scan...';
             document.getElementById('pagesScanned').textContent = '0';
             document.getElementById('documentsFound').textContent = '0';
+            document.getElementById('etaRow').classList.add('hidden');
+
+            // Initialize time tracking
+            scanStartTime = Date.now();
+            lastPagesScanned = 0;
 
             // Connect to SSE
             eventSource = new EventSource(`/api/scrape/progress/${currentSessionId}`);
@@ -275,18 +303,26 @@
                 document.getElementById('pagesScanned').textContent = data.pages_scanned;
                 document.getElementById('documentsFound').textContent = data.documents_found;
 
-                // Animate progress bar (indeterminate since we don't know total)
-                const bar = document.getElementById('progressBar');
-                const current = parseFloat(bar.style.width) || 0;
-                bar.style.width = Math.min(current + 5, 90) + '%';
+                // Show pages remaining and ETA if available
+                if (data.total_pages_queued !== undefined && data.total_pages_queued > 0) {
+                    document.getElementById('etaRow').classList.remove('hidden');
+                    document.getElementById('pagesRemaining').textContent =
+                        `${data.total_pages_queued.toLocaleString()} page${data.total_pages_queued !== 1 ? 's' : ''} remaining`;
+
+                    // Calculate and display ETA
+                    const eta = calculateETA(data.pages_scanned, data.total_pages_queued, scanStartTime);
+                    if (eta !== null) {
+                        document.getElementById('scanETA').textContent = `ETA: ${formatTimeEstimate(eta)}`;
+                    }
+                }
             });
 
             eventSource.addEventListener('complete', (e) => {
                 const data = JSON.parse(e.data);
                 eventSource.close();
 
-                document.getElementById('progressBar').style.width = '100%';
-                document.getElementById('progressStatus').textContent = 'Complete!';
+                document.getElementById('progressStatus').textContent = 'Complete! Redirecting...';
+                document.getElementById('etaRow').classList.add('hidden');
 
                 // Redirect to results page
                 setTimeout(() => {
@@ -308,17 +344,44 @@
             });
 
             // Handle connection errors (different from server-sent 'error' events)
+            let sseRetryCount = 0;
+            const MAX_SSE_RETRIES = 3;
+
             eventSource.onerror = (e) => {
                 if (eventSource.readyState === EventSource.CLOSED) {
                     eventSource.close();
-                    resetForm();
-                    alert('Connection lost. The server may have restarted. Please try again.');
+
+                    // Retry SSE connection
+                    if (sseRetryCount < MAX_SSE_RETRIES) {
+                        sseRetryCount++;
+                        const delay = 2000 * sseRetryCount;
+                        console.log(`SSE connection lost, retrying in ${delay}ms (attempt ${sseRetryCount}/${MAX_SSE_RETRIES})`);
+                        document.getElementById('progressStatus').textContent = `Connection lost, retrying (${sseRetryCount}/${MAX_SSE_RETRIES})...`;
+
+                        setTimeout(() => {
+                            // Reconnect to SSE
+                            eventSource = new EventSource(`/api/scrape/progress/${currentSessionId}`);
+                        }, delay);
+                    } else {
+                        resetForm();
+                        alert('Connection lost after multiple retries. Please check the server and try again.');
+                    }
                 }
             };
 
         } catch (error) {
             console.error('Error:', error);
-            alert('Failed to start scanning. Please try again.');
+
+            // Check if it's a network error
+            const isNetworkError = error.message === 'Failed to fetch' ||
+                                   error.name === 'TypeError' ||
+                                   error.message.includes('NetworkError');
+
+            if (isNetworkError) {
+                alert('Cannot connect to server. Please check if the server is running.');
+            } else {
+                alert('Failed to start scanning. Please try again.');
+            }
             resetForm();
         }
     });
