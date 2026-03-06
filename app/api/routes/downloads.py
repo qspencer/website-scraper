@@ -14,7 +14,7 @@ from app.schemas.scrape import (
 )
 from app.schemas.document import DocumentInfo
 from app.services.download_service import download_service
-from app.utils.file_utils import validate_download_path
+from app.utils.file_utils import validate_download_path, ensure_directory_exists
 from app.api.routes.scraper import scrape_sessions
 
 logger = get_logger(__name__)
@@ -29,18 +29,31 @@ download_sessions: Dict[str, dict] = {}
 async def validate_path(request: PathValidationRequest):
     """Validate a download path."""
     logger.debug(f"Validating path: {request.path}")
-    is_valid, message, abs_path = validate_download_path(request.path)
+    result = validate_download_path(request.path, required_bytes=request.required_bytes or 0)
 
-    if is_valid:
-        logger.debug(f"Path valid: {abs_path}")
+    if result["valid"]:
+        logger.debug(f"Path valid: {result['absolute_path']}")
     else:
-        logger.debug(f"Path invalid: {message}")
+        logger.debug(f"Path invalid: {result['message']}")
 
-    return PathValidationResponse(
-        valid=is_valid,
-        message=message,
-        absolute_path=abs_path,
-    )
+    return PathValidationResponse(**result)
+
+
+@router.post("/create-directory")
+async def create_directory(request: PathValidationRequest):
+    """Create a directory for downloads."""
+    if not request.path:
+        raise HTTPException(status_code=400, detail="Path cannot be empty")
+
+    logger.info(f"Creating directory: {request.path}")
+    success, result_msg = ensure_directory_exists(request.path)
+
+    if success:
+        logger.info(f"Directory created: {result_msg}")
+        return {"success": True, "message": "Directory created", "absolute_path": result_msg}
+    else:
+        logger.warning(f"Failed to create directory: {result_msg}")
+        raise HTTPException(status_code=400, detail=result_msg)
 
 
 @router.post("/start", response_model=DownloadStartResponse)
@@ -49,10 +62,11 @@ async def start_download(request: DownloadRequest):
     logger.info(f"Download requested: {len(request.document_urls)} files to {request.download_path}")
 
     # Validate path first
-    is_valid, message, abs_path = validate_download_path(request.download_path)
-    if not is_valid:
-        logger.warning(f"Invalid download path: {request.download_path} - {message}")
-        raise HTTPException(status_code=400, detail=message)
+    path_result = validate_download_path(request.download_path)
+    if not path_result["valid"]:
+        logger.warning(f"Invalid download path: {request.download_path} - {path_result['message']}")
+        raise HTTPException(status_code=400, detail=path_result["message"])
+    abs_path = path_result["absolute_path"]
 
     # Get documents from scrape session
     if request.session_id not in scrape_sessions:

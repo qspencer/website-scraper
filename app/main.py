@@ -8,7 +8,7 @@ import os
 from app.core.config import settings
 from app.core.constants import DocumentTypeFilter, CrawlDepthOption, FILTER_DISPLAY_NAMES
 from app.core.logging_config import setup_logging, get_logger
-from app.api.routes import scraper, downloads, settings as settings_routes
+from app.api.routes import scraper, downloads, settings as settings_routes, history
 from app.services.settings_service import runtime_settings
 
 # Initialize logging
@@ -64,6 +64,7 @@ templates = Jinja2Templates(directory=templates_dir)
 app.include_router(scraper.router)
 app.include_router(downloads.router)
 app.include_router(settings_routes.router)
+app.include_router(history.router)
 
 logger.info("API routes registered")
 
@@ -72,7 +73,7 @@ logger.info("API routes registered")
 async def index(request: Request):
     """Main page with scraping form."""
     logger.debug(f"Serving index page to {request.client.host if request.client else 'unknown'}")
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "index.html",
         {
@@ -86,6 +87,8 @@ async def index(request: Request):
             "max_depth": runtime_settings.max_crawl_depth,
         },
     )
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
 
 
 @app.get("/settings", response_class=HTMLResponse)
@@ -112,6 +115,19 @@ async def results_page(request: Request, session_id: str):
         {
             "title": f"Results - {settings.APP_NAME}",
             "session_id": session_id,
+        },
+    )
+
+
+@app.get("/history", response_class=HTMLResponse)
+async def history_page(request: Request):
+    """Scan history page."""
+    logger.debug("Serving history page")
+    return templates.TemplateResponse(
+        request,
+        "history.html",
+        {
+            "title": f"History - {settings.APP_NAME}",
         },
     )
 

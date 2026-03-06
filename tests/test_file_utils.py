@@ -39,26 +39,40 @@ class TestFormatFileSize:
 class TestValidateDownloadPath:
     def test_existing_writable_dir(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            is_valid, message, abs_path = validate_download_path(tmpdir)
-            assert is_valid is True
-            assert abs_path == tmpdir
+            result = validate_download_path(tmpdir)
+            assert result["valid"] is True
+            assert result["absolute_path"] == tmpdir
+            assert result["free_space_bytes"] is not None
 
     def test_nonexistent_but_creatable(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             new_path = os.path.join(tmpdir, "new_folder")
-            is_valid, message, abs_path = validate_download_path(new_path)
-            assert is_valid is True
-            assert "will be created" in message.lower()
+            result = validate_download_path(new_path)
+            assert result["valid"] is True
+            assert result["error_code"] == "not_exists"
+            assert "will be created" in result["message"].lower()
 
     def test_empty_path(self):
-        is_valid, message, abs_path = validate_download_path("")
-        assert is_valid is False
+        result = validate_download_path("")
+        assert result["valid"] is False
+        assert result["error_code"] == "empty"
 
     def test_expands_home(self):
-        is_valid, message, abs_path = validate_download_path("~/downloads")
-        # Should at least try to expand
-        if abs_path:
-            assert "~" not in abs_path
+        result = validate_download_path("~/downloads")
+        if result["absolute_path"]:
+            assert "~" not in result["absolute_path"]
+
+    def test_insufficient_space(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Request more bytes than could possibly be free
+            result = validate_download_path(tmpdir, required_bytes=2**62)
+            assert result["valid"] is False
+            assert result["error_code"] == "insufficient_space"
+
+    def test_sufficient_space(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = validate_download_path(tmpdir, required_bytes=1)
+            assert result["valid"] is True
 
 
 class TestEnsureDirectoryExists:

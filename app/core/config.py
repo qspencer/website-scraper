@@ -23,5 +23,8 @@ class Settings(BaseSettings):
     DEFAULT_DOWNLOAD_DIR: str = "./downloads"
     MAX_FILE_SIZE_MB: int = 100
 
+    # History
+    SCAN_HISTORY_LIMIT: int = 20
+
 
 settings = Settings()

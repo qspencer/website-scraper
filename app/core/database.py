@@ -52,18 +52,58 @@ def init_database():
             )
         """)
 
-        # Scan history table (for future use)
+        # Scan history table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS scan_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 url TEXT NOT NULL,
-                documents_found INTEGER DEFAULT 0,
+                crawl_option TEXT NOT NULL DEFAULT 'single',
+                max_depth INTEGER DEFAULT 1,
+                scan_mode TEXT NOT NULL DEFAULT 'batch',
+                document_filter TEXT NOT NULL DEFAULT 'common',
                 pages_scanned INTEGER DEFAULT 0,
+                documents_found INTEGER DEFAULT 0,
+                scan_error_count INTEGER DEFAULT 0,
+                document_error_count INTEGER DEFAULT 0,
+                duration_seconds REAL,
+                total_size_bytes INTEGER,
+                largest_file_name TEXT,
+                largest_file_size INTEGER,
+                smallest_file_name TEXT,
+                smallest_file_size INTEGER,
                 started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                completed_at TIMESTAMP,
-                status TEXT DEFAULT 'pending'
+                completed_at TIMESTAMP
             )
         """)
+
+        # Migrate scan_history if it's the old schema (missing crawl_option column)
+        try:
+            cursor.execute("SELECT crawl_option FROM scan_history LIMIT 1")
+        except sqlite3.OperationalError:
+            logger.info("Migrating scan_history table to new schema")
+            cursor.execute("DROP TABLE scan_history")
+            cursor.execute("""
+                CREATE TABLE scan_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url TEXT NOT NULL,
+                    crawl_option TEXT NOT NULL DEFAULT 'single',
+                    max_depth INTEGER DEFAULT 1,
+                    scan_mode TEXT NOT NULL DEFAULT 'batch',
+                    document_filter TEXT NOT NULL DEFAULT 'common',
+                    pages_scanned INTEGER DEFAULT 0,
+                    documents_found INTEGER DEFAULT 0,
+                    scan_error_count INTEGER DEFAULT 0,
+                    document_error_count INTEGER DEFAULT 0,
+                    duration_seconds REAL,
+                    total_size_bytes INTEGER,
+                    largest_file_name TEXT,
+                    largest_file_size INTEGER,
+                    smallest_file_name TEXT,
+                    smallest_file_size INTEGER,
+                    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP
+                )
+            """)
 
         logger.info("Database initialized successfully")
 

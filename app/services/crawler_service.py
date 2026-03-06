@@ -41,6 +41,7 @@ class CrawlState:
         self.pages_scanned: int = 0
         self.batches_completed: int = 0  # Track batch number for progress display
         self.errors: List[str] = []
+        self.failed_pages: List[Tuple[str, int]] = []  # (url, depth) of pages that failed to scan
         self.skipped_duplicates: int = 0  # Track skipped duplicate files
 
 
@@ -117,6 +118,7 @@ class CrawlerService:
         crawl_option: CrawlDepthOption,
         max_depth: int,
         state: Optional[CrawlState] = None,
+        scan_all_pages: bool = False,
     ) -> AsyncGenerator[ScrapeProgress | ScrapeResult, None]:
         """
         Crawl a website and yield progress updates.
@@ -133,11 +135,13 @@ class CrawlerService:
         # Create state if not provided
         if state is None:
             state = CrawlState()
-            # Clear the inaccessible URL log cache for a fresh scan
-            clear_inaccessible_log_cache()
 
         # Determine if this is a continuation (state has pending pages from previous batch)
         is_continuation = len(state.pending_queue) > 0
+
+        if not is_continuation:
+            # Clear the inaccessible URL log cache for a fresh scan
+            clear_inaccessible_log_cache()
 
         if is_continuation:
             logger.info(f"Resuming crawl: {len(state.pending_queue)} pages remaining, "
@@ -178,8 +182,8 @@ class CrawlerService:
         try:
             async with await scraper_service.create_session() as session:
                 while queue:
-                    # Check batch limit
-                    if pages_this_batch >= max_pages_per_batch:
+                    # Check batch limit (skip if scanning all pages)
+                    if not scan_all_pages and pages_this_batch >= max_pages_per_batch:
                         # Save remaining queue to state for continuation
                         state.pending_queue = list(queue)
                         logger.info(f"Batch limit reached ({max_pages_per_batch}), "
@@ -187,11 +191,14 @@ class CrawlerService:
                         break
 
                     # Grab a batch of URLs to process concurrently
-                    batch_size = min(
-                        self.max_concurrent,
-                        len(queue),
-                        max_pages_per_batch - pages_this_batch
-                    )
+                    if scan_all_pages:
+                        batch_size = min(self.max_concurrent, len(queue))
+                    else:
+                        batch_size = min(
+                            self.max_concurrent,
+                            len(queue),
+                            max_pages_per_batch - pages_this_batch
+                        )
 
                     batch: List[Tuple[str, int]] = []
                     while len(batch) < batch_size and queue:
@@ -258,9 +265,11 @@ class CrawlerService:
                         # Handle exceptions from gather
                         if isinstance(result, Exception):
                             url = batch[i][0] if i < len(batch) else "unknown"
+                            depth = batch[i][1] if i < len(batch) else 0
                             error_msg = f"Exception scanning {url}: {type(result).__name__}: {result}"
                             logger.error(error_msg)
                             state.errors.append(error_msg)
+                            state.failed_pages.append((url, depth))
                             errors_in_batch += 1
                             continue
 
@@ -268,6 +277,7 @@ class CrawlerService:
                             error_msg = f"Error scanning {result.url}: {result.error}"
                             logger.error(error_msg)
                             state.errors.append(error_msg)
+                            state.failed_pages.append((result.url, result.depth))
                             errors_in_batch += 1
                             continue
 

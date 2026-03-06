@@ -22,6 +22,7 @@ class RuntimeSettings:
         "default_crawl_depth": default_settings.DEFAULT_CRAWL_DEPTH,
         "max_crawl_depth": default_settings.MAX_CRAWL_DEPTH,
         "max_concurrent_requests": default_settings.MAX_CONCURRENT_REQUESTS,
+        "scan_history_limit": default_settings.SCAN_HISTORY_LIMIT,
     }
 
     def __init__(self):
@@ -123,6 +124,20 @@ class RuntimeSettings:
         self._settings["max_concurrent_requests"] = value
         self._save_setting("max_concurrent_requests", value)
         logger.info(f"max_concurrent_requests set to {value}")
+
+    @property
+    def scan_history_limit(self) -> int:
+        return self._settings["scan_history_limit"]
+
+    @scan_history_limit.setter
+    def scan_history_limit(self, value: int):
+        if value < 5:
+            value = 5
+        if value > 100:
+            value = 100
+        self._settings["scan_history_limit"] = value
+        self._save_setting("scan_history_limit", value)
+        logger.info(f"scan_history_limit set to {value}")
 
     def get_all(self) -> Dict[str, Any]:
         """Get all settings as a dictionary."""

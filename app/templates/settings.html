@@ -130,6 +130,26 @@
                 <p class="mt-1 text-sm text-gray-500">Maximum depth users can select on the scan page.</p>
             </div>
 
+            <!-- Scan History Limit -->
+            <div>
+                <label for="scan_history_limit" class="block text-sm font-medium text-gray-700 mb-2">
+                    Scan History Limit
+                </label>
+                <div class="flex items-center gap-4">
+                    <input
+                        type="number"
+                        id="scan_history_limit"
+                        name="scan_history_limit"
+                        min="5"
+                        max="100"
+                        value="{{ settings.scan_history_limit }}"
+                        class="w-32 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    >
+                    <span class="text-sm text-gray-500">scans (5 - 100)</span>
+                </div>
+                <p class="mt-1 text-sm text-gray-500">Number of past scans to keep in history.</p>
+            </div>
+
             <!-- Buttons -->
             <div class="flex gap-4 pt-4 border-t">
                 <button
@@ -167,6 +187,7 @@
             max_concurrent_requests: parseInt(form.max_concurrent_requests.value),
             default_crawl_depth: parseInt(form.default_crawl_depth.value),
             max_crawl_depth: parseInt(form.max_crawl_depth.value),
+            scan_history_limit: parseInt(form.scan_history_limit.value),
         };
 
         try {
@@ -218,6 +239,7 @@
         document.getElementById('max_concurrent_requests').value = settings.max_concurrent_requests;
         document.getElementById('default_crawl_depth').value = settings.default_crawl_depth;
         document.getElementById('max_crawl_depth').value = settings.max_crawl_depth;
+        document.getElementById('scan_history_limit').value = settings.scan_history_limit;
     }
 
     function showStatus(message, type) {

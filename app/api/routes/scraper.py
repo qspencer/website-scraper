@@ -16,11 +16,57 @@ from app.schemas.scrape import (
 )
 from app.services.crawler_service import crawler_service, CrawlState
 from app.services.scraper_service import scraper_service
+from app.services.history_service import save_scan
+from app.services.settings_service import runtime_settings
 from app.utils.file_utils import format_file_size
+from app.schemas.document import DocumentInfo
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/scrape", tags=["scraper"])
+
+
+def _save_scan_history(session: dict) -> None:
+    """Save a completed scan to history."""
+    try:
+        request = session["request"]
+        result = session.get("result")
+        if not result:
+            return
+
+        start_time = session.get("start_time")
+        end_time = session.get("end_time")
+        duration = (end_time - start_time) if (start_time and end_time) else None
+
+        # Compute size stats from documents
+        docs_with_size = [d for d in result.documents if d.file_size_bytes and d.file_size_bytes > 0]
+        total_size = sum(d.file_size_bytes for d in docs_with_size) if docs_with_size else None
+        largest = max(docs_with_size, key=lambda d: d.file_size_bytes) if docs_with_size else None
+        smallest = min(docs_with_size, key=lambda d: d.file_size_bytes) if docs_with_size else None
+
+        scan_mode = "single page"
+        if request.crawl_option.value == "follow":
+            scan_mode = "continuous" if request.scan_all_pages else "batch"
+
+        save_scan({
+            "url": str(request.url),
+            "crawl_option": request.crawl_option.value,
+            "max_depth": request.max_depth,
+            "scan_mode": scan_mode,
+            "document_filter": request.document_type_filter.value,
+            "pages_scanned": result.pages_scanned,
+            "documents_found": len(result.documents),
+            "scan_error_count": len(result.errors),
+            "document_error_count": sum(1 for d in result.documents if not d.is_accessible),
+            "duration_seconds": duration,
+            "total_size_bytes": total_size,
+            "largest_file_name": largest.filename if largest else None,
+            "largest_file_size": largest.file_size_bytes if largest else None,
+            "smallest_file_name": smallest.filename if smallest else None,
+            "smallest_file_size": smallest.file_size_bytes if smallest else None,
+        })
+    except Exception as e:
+        logger.error(f"Failed to save scan history: {e}", exc_info=True)
 
 # In-memory session storage (in production, use Redis or similar)
 scrape_sessions: Dict[str, dict] = {}
@@ -116,13 +162,30 @@ async def scrape_progress(session_id: str):
                 crawl_option=request.crawl_option,
                 max_depth=request.max_depth,
                 state=crawl_state,
+                scan_all_pages=request.scan_all_pages,
             ):
                 # Check if cancelled
                 if session.get("cancelled"):
                     logger.info(f"Session {session_id} cancelled by user")
+                    # Save partial results from crawl state
+                    partial_result = ScrapeResult(
+                        success=True,
+                        documents=crawl_state.all_documents,
+                        pages_scanned=crawl_state.pages_scanned,
+                        errors=crawl_state.errors,
+                        has_more_pages=False,
+                        pages_remaining=0,
+                    )
+                    session["result"] = partial_result
+                    session["status"] = "complete"
+                    session["end_time"] = time.time()
+                    _save_scan_history(session)
                     yield {
                         "event": "cancelled",
-                        "data": json.dumps({"message": "Scraping cancelled"}),
+                        "data": json.dumps({
+                            "message": "Scraping cancelled",
+                            "documents_found": len(crawl_state.all_documents),
+                        }),
                     }
                     break
 
@@ -136,6 +199,7 @@ async def scrape_progress(session_id: str):
                     session["result"] = update
                     session["status"] = "complete"
                     session["end_time"] = time.time()
+                    _save_scan_history(session)
 
                     logger.info(f"Session {session_id} complete: "
                                f"{len(update.documents)} documents found, "
@@ -205,11 +269,18 @@ async def get_scan_summary(session_id: str):
         "crawl_option": request.crawl_option.value,
         "max_depth": request.max_depth,
         "document_filter": request.document_type_filter.value,
+        "scan_all_pages": request.scan_all_pages,
         "pages_scanned": pages_scanned,
         "documents_found": documents_found,
         "duration_seconds": duration_seconds,
         "has_more_pages": has_more_pages,
         "pages_remaining": pages_remaining,
+        "scan_error_count": len(result.errors) if result else 0,
+        "document_error_count": sum(1 for d in result.documents if not d.is_accessible) if result else 0,
+        "has_retryable_errors": bool(
+            (result and any(not d.is_accessible for d in result.documents)) or
+            (session.get("crawl_state") and session["crawl_state"].failed_pages)
+        ),
     }
 
 
@@ -223,6 +294,143 @@ async def cancel_scrape(session_id: str):
     logger.info(f"Cancellation requested for session: {session_id}")
     scrape_sessions[session_id]["cancelled"] = True
     return {"message": "Cancellation requested"}
+
+
+@router.post("/retry/{session_id}")
+async def retry_errors(session_id: str):
+    """Retry failed pages and inaccessible documents via SSE."""
+    if session_id not in scrape_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = scrape_sessions[session_id]
+    result = session.get("result")
+    if not result:
+        raise HTTPException(status_code=400, detail="No results to retry")
+
+    crawl_state = session.get("crawl_state")
+    request = session["request"]
+
+    # Gather retryable items
+    failed_docs = [d for d in result.documents if not d.is_accessible]
+    failed_pages = list(crawl_state.failed_pages) if crawl_state else []
+
+    if not failed_docs and not failed_pages:
+        raise HTTPException(status_code=400, detail="No errors to retry")
+
+    total_items = len(failed_docs) + len(failed_pages)
+    logger.info(f"Retrying {len(failed_docs)} documents and {len(failed_pages)} pages "
+                f"for session {session_id}")
+
+    async def event_generator():
+        import aiohttp
+        completed = 0
+        docs_fixed = 0
+        pages_fixed = 0
+        new_docs_found = 0
+
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=runtime_settings.request_timeout),
+            headers={"User-Agent": "Mozilla/5.0 (compatible; DocumentScraper/1.0)"}
+        ) as http_session:
+            # Retry failed documents (re-do HEAD requests)
+            for doc in failed_docs:
+                completed += 1
+                yield {
+                    "event": "progress",
+                    "data": json.dumps({
+                        "completed": completed,
+                        "total": total_items,
+                        "message": f"Retrying document: {doc.filename}",
+                    }),
+                }
+
+                try:
+                    updated = await scraper_service.get_file_info(
+                        http_session, doc.url, doc.source_page, doc.depth
+                    )
+                    if updated.is_accessible:
+                        # Update the document in-place in the result
+                        doc.is_accessible = True
+                        doc.error_message = None
+                        doc.file_size_bytes = updated.file_size_bytes
+                        doc.file_size_display = updated.file_size_display
+                        doc.filename = updated.filename
+                        docs_fixed += 1
+                except Exception as e:
+                    logger.debug(f"Retry failed for document {doc.url}: {e}")
+
+            # Retry failed pages (re-scan for documents)
+            if failed_pages and crawl_state:
+                for page_url, depth in failed_pages:
+                    completed += 1
+                    yield {
+                        "event": "progress",
+                        "data": json.dumps({
+                            "completed": completed,
+                            "total": total_items,
+                            "message": f"Retrying page: {page_url[:60]}...",
+                        }),
+                    }
+
+                    try:
+                        page_links, documents, warning = await scraper_service.scan_page(
+                            http_session, page_url, request.document_type_filter, depth
+                        )
+                        pages_fixed += 1
+
+                        # Add any new documents found
+                        for doc in documents:
+                            if doc.url not in crawl_state.document_urls:
+                                filename_lower = doc.filename.lower()
+                                if filename_lower not in crawl_state.document_filenames:
+                                    crawl_state.document_urls.add(doc.url)
+                                    crawl_state.document_filenames.add(filename_lower)
+                                    crawl_state.all_documents.append(doc)
+                                    result.documents.append(doc)
+                                    new_docs_found += 1
+                    except Exception as e:
+                        logger.debug(f"Retry failed for page {page_url}: {e}")
+
+                # Clear failed pages that succeeded
+                if pages_fixed > 0:
+                    # Remove pages that were successfully retried
+                    crawl_state.failed_pages = [
+                        (url, d) for url, d in crawl_state.failed_pages
+                        if (url, d) not in failed_pages[:completed]
+                    ]
+
+            # Update error lists
+            if crawl_state:
+                # Rebuild errors: keep only errors for pages still failing
+                still_failed_urls = {url for url, _ in crawl_state.failed_pages}
+                crawl_state.errors = [
+                    e for e in crawl_state.errors
+                    if not any(url in e for url in
+                              {url for url, _ in failed_pages} - still_failed_urls)
+                ]
+                result.errors = crawl_state.errors
+
+            # Recount
+            remaining_scan_errors = len(result.errors)
+            remaining_doc_errors = sum(1 for d in result.documents if not d.is_accessible)
+
+        logger.info(f"Retry complete for session {session_id}: "
+                    f"{docs_fixed} docs fixed, {pages_fixed} pages fixed, "
+                    f"{new_docs_found} new docs found")
+
+        yield {
+            "event": "complete",
+            "data": json.dumps({
+                "docs_fixed": docs_fixed,
+                "pages_fixed": pages_fixed,
+                "new_docs_found": new_docs_found,
+                "remaining_scan_errors": remaining_scan_errors,
+                "remaining_doc_errors": remaining_doc_errors,
+                "total_documents": len(result.documents),
+            }),
+        }
+
+    return EventSourceResponse(event_generator())
 
 
 @router.delete("/session/{session_id}")

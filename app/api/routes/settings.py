@@ -21,6 +21,7 @@ class SettingsUpdate(BaseModel):
     default_crawl_depth: Optional[int] = None
     max_crawl_depth: Optional[int] = None
     max_concurrent_requests: Optional[int] = None
+    scan_history_limit: Optional[int] = None
 
 
 class SettingsResponse(BaseModel):
@@ -31,6 +32,7 @@ class SettingsResponse(BaseModel):
     default_crawl_depth: int
     max_crawl_depth: int
     max_concurrent_requests: int
+    scan_history_limit: int
 
 
 @router.get("", response_model=SettingsResponse)

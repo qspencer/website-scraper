@@ -5,12 +5,19 @@
     <div class="bg-white rounded-lg shadow-md p-6">
         <div class="flex items-center justify-between mb-6">
             <h1 class="text-2xl font-bold text-gray-800">Scan Website for Documents</h1>
-            <a href="/settings" class="text-gray-500 hover:text-gray-700" title="Settings">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-            </a>
+            <div class="flex items-center gap-3">
+                <a href="/history" class="text-gray-500 hover:text-gray-700" title="Scan History">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                </a>
+                <a href="/settings" class="text-gray-500 hover:text-gray-700" title="Settings">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                </a>
+            </div>
         </div>
 
         <form id="scrapeForm" class="space-y-6">
@@ -32,7 +39,8 @@
                     >
                     <datalist id="urlHistory"></datalist>
                 </div>
-                <p class="mt-1 text-sm text-gray-500">Enter the URL of the page to scan for documents</p>
+                <p id="urlHint" class="mt-1 text-sm text-gray-500">Enter the URL of the page to scan for documents</p>
+                <p id="urlError" class="mt-1 text-sm text-red-600 hidden"></p>
             </div>
 
             <!-- Document Type Filter -->
@@ -96,6 +104,19 @@
                             >
                             <button type="button" onclick="adjustDepth(1)" class="w-7 h-7 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium transition">+</button>
                         </div>
+                    </div>
+                    <!-- Scan all pages option (only visible when following links) -->
+                    <div id="scanAllOption" class="ml-7 hidden">
+                        <label class="flex items-center cursor-pointer">
+                            <input
+                                type="checkbox"
+                                id="scanAllPages"
+                                name="scan_all_pages"
+                                class="w-4 h-4 text-blue-600 focus:ring-blue-500 rounded"
+                            >
+                            <span class="ml-2 text-gray-700">Scan entire site without pausing</span>
+                        </label>
+                        <p class="mt-1 text-xs text-gray-500">Scans all pages in one go. You can cancel at any time and keep results found so far.</p>
                     </div>
                 </div>
             </div>
@@ -197,9 +218,12 @@
 
         document.getElementById('depthControlInline').style.display = isFollow ? 'flex' : 'none';
         document.getElementById('depthDisplay').classList.toggle('hidden', !isFollow);
+        document.getElementById('scanAllOption').classList.toggle('hidden', !isFollow);
 
         if (isFollow) {
             updateDepthDisplay();
+        } else {
+            document.getElementById('scanAllPages').checked = false;
         }
     }
 
@@ -219,6 +243,29 @@
         const value = document.getElementById('maxDepth').value;
         document.getElementById('depthDisplayValue').textContent = value;
     }
+
+    // URL error display
+    function showUrlError(message) {
+        const urlInput = document.getElementById('url');
+        const errorEl = document.getElementById('urlError');
+        const hintEl = document.getElementById('urlHint');
+        errorEl.textContent = message;
+        errorEl.classList.remove('hidden');
+        hintEl.classList.add('hidden');
+        urlInput.classList.add('border-red-500');
+        urlInput.focus();
+    }
+
+    function clearUrlError() {
+        const urlInput = document.getElementById('url');
+        const errorEl = document.getElementById('urlError');
+        const hintEl = document.getElementById('urlHint');
+        errorEl.classList.add('hidden');
+        hintEl.classList.remove('hidden');
+        urlInput.classList.remove('border-red-500');
+    }
+
+    document.getElementById('url').addEventListener('input', clearUrlError);
 
     let currentSessionId = null;
     let eventSource = null;
@@ -262,19 +309,34 @@
 
         try {
             // Start scrape
+            const payload = {
+                url: form.url.value,
+                document_type_filter: form.document_type_filter.value,
+                crawl_option: form.crawl_option.value,
+                max_depth: parseInt(form.max_depth.value) || 2,
+                scan_all_pages: document.getElementById('scanAllPages').checked
+            };
+            console.log('Scrape request payload:', payload);
+
             const response = await fetch('/api/scrape/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    url: form.url.value,
-                    document_type_filter: form.document_type_filter.value,
-                    crawl_option: form.crawl_option.value,
-                    max_depth: parseInt(form.max_depth.value)
-                })
+                body: JSON.stringify(payload)
             });
 
             if (!response.ok) {
-                throw new Error('Failed to start scraping');
+                const errBody = await response.json().catch(() => null);
+                const detail = errBody?.detail;
+                // Extract user-friendly message from Pydantic validation errors
+                if (Array.isArray(detail)) {
+                    const urlError = detail.find(e => e.loc?.includes('url'));
+                    if (urlError) {
+                        throw new Error(urlError.msg.replace(/^Value error, /, ''));
+                    }
+                    const msgs = detail.map(e => e.msg.replace(/^Value error, /, '')).join('; ');
+                    throw new Error(msgs);
+                }
+                throw new Error(typeof detail === 'string' ? detail : 'Failed to start scanning');
             }
 
             const data = await response.json();
@@ -340,7 +402,16 @@
 
             eventSource.addEventListener('cancelled', (e) => {
                 eventSource.close();
-                resetForm();
+                const data = JSON.parse(e.data);
+                if (data.documents_found > 0) {
+                    document.getElementById('progressStatus').textContent =
+                        `Cancelled. Found ${data.documents_found} document${data.documents_found !== 1 ? 's' : ''}. Redirecting...`;
+                    setTimeout(() => {
+                        window.location.href = `/results/${currentSessionId}`;
+                    }, 1000);
+                } else {
+                    resetForm();
+                }
             });
 
             // Handle connection errors (different from server-sent 'error' events)
@@ -380,18 +451,19 @@
             if (isNetworkError) {
                 alert('Cannot connect to server. Please check if the server is running.');
             } else {
-                alert('Failed to start scanning. Please try again.');
+                showUrlError(error.message);
             }
             resetForm();
         }
     });
 
     function cancelScrape() {
-        if (currentSessionId && eventSource) {
-            eventSource.close();
+        if (currentSessionId) {
+            document.getElementById('progressStatus').textContent = 'Cancelling...';
+            document.getElementById('cancelBtn').disabled = true;
             fetch(`/api/scrape/cancel/${currentSessionId}`, { method: 'DELETE' });
+            // Let the 'cancelled' SSE event handle the redirect/reset
         }
-        resetForm();
     }
 
     function resetForm() {

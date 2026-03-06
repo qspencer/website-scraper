@@ -165,22 +165,15 @@
                     <label for="downloadPath" class="block text-sm font-medium text-gray-700 mb-2">
                         Download Location
                     </label>
-                    <div class="flex gap-2">
-                        <input
-                            type="text"
-                            id="downloadPath"
-                            placeholder="./downloads"
-                            value="./downloads"
-                            class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                        >
-                        <button
-                            onclick="validatePath()"
-                            class="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
-                        >
-                            Validate
-                        </button>
-                    </div>
-                    <p id="pathStatus" class="mt-1 text-sm text-gray-500"></p>
+                    <input
+                        type="text"
+                        id="downloadPath"
+                        placeholder="./downloads"
+                        value="./downloads"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                        oninput="debouncedValidatePath()"
+                    >
+                    <div id="pathStatus" class="mt-1 text-sm text-gray-500"></div>
                 </div>
 
                 <!-- Download Size Info -->
@@ -199,31 +192,9 @@
                         </span>
                     </div>
                     <div id="unknownSizeWarning" class="hidden mt-2">
-                        <div class="flex items-center justify-between">
-                            <span class="text-blue-600 text-xs">
-                                * Size unknown for <span id="unknownSizeCount">0</span> accessible files
-                            </span>
-                            <button
-                                id="calculateSizesBtn"
-                                onclick="calculateSizes()"
-                                class="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition flex items-center gap-1"
-                            >
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-                                </svg>
-                                <span id="calculateSizesBtnText">Calculate Sizes</span>
-                            </button>
-                        </div>
-                        <div id="calculateSizesProgress" class="hidden mt-2 space-y-1">
-                            <div class="flex justify-between text-xs text-blue-600">
-                                <span id="calculateSizesStatus">Calculating...</span>
-                                <span><span id="calculateSizesCompleted">0</span> / <span id="calculateSizesTotal">0</span></span>
-                            </div>
-                            <div class="h-1.5 bg-blue-200 rounded-full overflow-hidden">
-                                <div id="calculateSizesBar" class="h-full bg-blue-600 transition-all duration-150" style="width: 0%"></div>
-                            </div>
-                            <p id="calculateSizesCurrentFile" class="text-xs text-gray-500 truncate"></p>
-                        </div>
+                        <span class="text-blue-600 text-xs">
+                            * Size unknown for <span id="unknownSizeCount">0</span> accessible files
+                        </span>
                     </div>
                 </div>
 
@@ -298,6 +269,7 @@
             </div>
 
             <div class="space-y-3">
+                <!-- Scan Parameters -->
                 <div class="flex items-start gap-3">
                     <svg class="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
@@ -311,8 +283,19 @@
                 <div class="grid grid-cols-2 gap-3">
                     <div class="bg-gray-50 rounded-lg p-3">
                         <p class="text-xs text-gray-500 uppercase tracking-wide">Crawl Depth</p>
-                        <p id="summaryDepth" class="text-xl font-semibold text-gray-800"></p>
+                        <p id="summaryDepth" class="text-sm font-semibold text-gray-800"></p>
                     </div>
+                    <div class="bg-gray-50 rounded-lg p-3">
+                        <p class="text-xs text-gray-500 uppercase tracking-wide">Scan Mode</p>
+                        <p id="summaryScanMode" class="text-sm font-semibold text-gray-800"></p>
+                    </div>
+                </div>
+
+                <!-- Divider -->
+                <hr class="border-gray-200">
+
+                <!-- Result Statistics -->
+                <div class="grid grid-cols-3 gap-3">
                     <div class="bg-gray-50 rounded-lg p-3">
                         <p class="text-xs text-gray-500 uppercase tracking-wide">Pages Scanned</p>
                         <p id="summaryPages" class="text-xl font-semibold text-gray-800"></p>
@@ -329,6 +312,63 @@
 
                 <div id="summaryMorePages" class="hidden bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
                     <span id="summaryRemaining"></span> more pages available to scan
+                </div>
+
+                <!-- Error counts (shown only when errors exist) -->
+                <div id="summaryErrorsRow" class="hidden">
+                    <div class="grid grid-cols-2 gap-3">
+                        <div class="bg-red-50 rounded-lg p-3">
+                            <p class="text-xs text-red-600 uppercase tracking-wide">Scan Errors</p>
+                            <p id="summaryScanErrors" class="text-sm font-semibold text-red-700"></p>
+                        </div>
+                        <div class="bg-red-50 rounded-lg p-3">
+                            <p class="text-xs text-red-600 uppercase tracking-wide">Document Errors</p>
+                            <p id="summaryDocErrors" class="text-sm font-semibold text-red-700"></p>
+                        </div>
+                    </div>
+                    <button
+                        id="retryBtn"
+                        onclick="retryErrors()"
+                        class="hidden w-full mt-3 py-2 px-4 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition flex items-center justify-center gap-2"
+                    >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                        <span id="retryBtnText">Retry failed items</span>
+                        <div id="retrySpinner" class="spinner hidden" style="width: 16px; height: 16px; border-width: 2px;"></div>
+                    </button>
+                    <p id="retryResult" class="hidden mt-2 text-sm text-center"></p>
+                </div>
+
+                <!-- Show Additional Info Toggle -->
+                <label class="flex items-center cursor-pointer pt-1">
+                    <input
+                        type="checkbox"
+                        id="showAdditionalInfo"
+                        onchange="toggleAdditionalInfo()"
+                        class="w-4 h-4 text-blue-600 focus:ring-blue-500 rounded"
+                    >
+                    <span class="ml-2 text-sm text-gray-600">Show additional information</span>
+                </label>
+
+                <!-- Additional Info (hidden by default) -->
+                <div id="additionalInfoSection" class="hidden space-y-3">
+                    <div class="bg-gray-50 rounded-lg p-3">
+                        <p class="text-xs text-gray-500 uppercase tracking-wide">Document Filter</p>
+                        <p id="summaryFilter" class="text-sm font-semibold text-gray-800"></p>
+                    </div>
+                    <div class="bg-purple-50 rounded-lg p-3">
+                        <p class="text-xs text-purple-600 uppercase tracking-wide">Total Size</p>
+                        <p id="summaryTotalSize" class="text-sm font-semibold text-purple-700"></p>
+                    </div>
+                    <div class="bg-purple-50 rounded-lg p-3">
+                        <p class="text-xs text-purple-600 uppercase tracking-wide">Largest Document</p>
+                        <p id="summaryLargest" class="text-sm font-semibold text-purple-700 break-all"></p>
+                    </div>
+                    <div class="bg-purple-50 rounded-lg p-3">
+                        <p class="text-xs text-purple-600 uppercase tracking-wide">Smallest Document</p>
+                        <p id="summarySmallest" class="text-sm font-semibold text-purple-700 break-all"></p>
+                    </div>
                 </div>
             </div>
 
@@ -400,6 +440,9 @@
 
             filterDocuments();  // Apply filters (including hide inaccessible)
 
+            // Validate the default download path
+            validatePath();
+
             // Show scan summary modal on first load
             if (!summaryShown && allDocuments.length > 0) {
                 showScanSummary();
@@ -438,6 +481,15 @@
                 document.getElementById('summaryDepth').textContent = `${summary.max_depth} levels`;
             }
 
+            // Show scan mode
+            if (summary.crawl_option === 'single') {
+                document.getElementById('summaryScanMode').textContent = 'Single page';
+            } else if (summary.scan_all_pages) {
+                document.getElementById('summaryScanMode').textContent = 'Continuous';
+            } else {
+                document.getElementById('summaryScanMode').textContent = 'Batch';
+            }
+
             document.getElementById('summaryPages').textContent = summary.pages_scanned.toLocaleString();
             document.getElementById('summaryDocs').textContent = summary.documents_found.toLocaleString();
 
@@ -456,6 +508,53 @@
                 document.getElementById('summaryMorePages').classList.add('hidden');
             }
 
+            // Show error counts if any errors occurred
+            const scanErrors = summary.scan_error_count || 0;
+            const docErrors = summary.document_error_count || 0;
+            if (scanErrors > 0 || docErrors > 0) {
+                document.getElementById('summaryErrorsRow').classList.remove('hidden');
+                document.getElementById('summaryScanErrors').textContent = scanErrors.toLocaleString();
+                document.getElementById('summaryDocErrors').textContent = docErrors.toLocaleString();
+
+                // Show retry button if there are retryable errors
+                if (summary.has_retryable_errors) {
+                    const retryBtn = document.getElementById('retryBtn');
+                    retryBtn.classList.remove('hidden');
+                    const total = scanErrors + docErrors;
+                    document.getElementById('retryBtnText').textContent =
+                        `Retry ${total} failed item${total !== 1 ? 's' : ''}`;
+                }
+                document.getElementById('retryResult').classList.add('hidden');
+            } else {
+                document.getElementById('summaryErrorsRow').classList.add('hidden');
+            }
+
+            // Populate additional info fields
+            const filterLabels = {common: 'Common Documents', all: 'All Files', pdf_only: 'PDFs Only'};
+            document.getElementById('summaryFilter').textContent = filterLabels[summary.document_filter] || summary.document_filter;
+
+            // Compute size stats from loaded documents
+            const docsWithSize = allDocuments.filter(d => d.file_size_bytes != null && d.file_size_bytes > 0);
+            if (docsWithSize.length > 0) {
+                const totalBytes = docsWithSize.reduce((sum, d) => sum + d.file_size_bytes, 0);
+                const largest = docsWithSize.reduce((a, b) => a.file_size_bytes >= b.file_size_bytes ? a : b);
+                const smallest = docsWithSize.reduce((a, b) => a.file_size_bytes <= b.file_size_bytes ? a : b);
+
+                document.getElementById('summaryTotalSize').textContent = formatFileSize(totalBytes);
+                document.getElementById('summaryLargest').textContent = `${largest.filename} (${formatFileSize(largest.file_size_bytes)})`;
+                document.getElementById('summaryLargest').title = largest.filename;
+                document.getElementById('summarySmallest').textContent = `${smallest.filename} (${formatFileSize(smallest.file_size_bytes)})`;
+                document.getElementById('summarySmallest').title = smallest.filename;
+            } else {
+                document.getElementById('summaryTotalSize').textContent = 'Unknown';
+                document.getElementById('summaryLargest').textContent = 'Unknown';
+                document.getElementById('summarySmallest').textContent = 'Unknown';
+            }
+
+            // Reset checkbox state
+            document.getElementById('showAdditionalInfo').checked = false;
+            document.getElementById('additionalInfoSection').classList.add('hidden');
+
             // Show modal
             document.getElementById('scanSummaryModal').classList.remove('hidden');
 
@@ -470,6 +569,107 @@
 
     function closeScanSummary() {
         document.getElementById('scanSummaryModal').classList.add('hidden');
+    }
+
+    function toggleAdditionalInfo() {
+        const checked = document.getElementById('showAdditionalInfo').checked;
+        document.getElementById('additionalInfoSection').classList.toggle('hidden', !checked);
+    }
+
+    function retryErrors() {
+        const retryBtn = document.getElementById('retryBtn');
+        const btnText = document.getElementById('retryBtnText');
+        const spinner = document.getElementById('retrySpinner');
+        const resultEl = document.getElementById('retryResult');
+
+        retryBtn.disabled = true;
+        btnText.textContent = 'Retrying...';
+        spinner.classList.remove('hidden');
+        resultEl.classList.add('hidden');
+
+        const eventSource = new EventSource(`/api/scrape/retry/${sessionId}`);
+
+        eventSource.addEventListener('progress', (e) => {
+            const data = JSON.parse(e.data);
+            btnText.textContent = `Retrying... (${data.completed}/${data.total})`;
+        });
+
+        eventSource.addEventListener('complete', (e) => {
+            eventSource.close();
+            const data = JSON.parse(e.data);
+
+            spinner.classList.add('hidden');
+            retryBtn.disabled = false;
+
+            // Build result message
+            const parts = [];
+            if (data.docs_fixed > 0) parts.push(`${data.docs_fixed} document${data.docs_fixed !== 1 ? 's' : ''} recovered`);
+            if (data.pages_fixed > 0) parts.push(`${data.pages_fixed} page${data.pages_fixed !== 1 ? 's' : ''} recovered`);
+            if (data.new_docs_found > 0) parts.push(`${data.new_docs_found} new document${data.new_docs_found !== 1 ? 's' : ''} found`);
+
+            const remainingErrors = data.remaining_scan_errors + data.remaining_doc_errors;
+
+            if (parts.length > 0) {
+                resultEl.textContent = parts.join(', ');
+                resultEl.className = 'mt-2 text-sm text-center text-green-700';
+                resultEl.classList.remove('hidden');
+            } else if (remainingErrors > 0) {
+                resultEl.textContent = 'All items still failing. The server may be temporarily unavailable.';
+                resultEl.className = 'mt-2 text-sm text-center text-gray-500';
+                resultEl.classList.remove('hidden');
+            }
+
+            // Update error counts
+            document.getElementById('summaryScanErrors').textContent = data.remaining_scan_errors.toLocaleString();
+            document.getElementById('summaryDocErrors').textContent = data.remaining_doc_errors.toLocaleString();
+
+            if (remainingErrors > 0) {
+                btnText.textContent = `Retry ${remainingErrors} failed item${remainingErrors !== 1 ? 's' : ''}`;
+            } else {
+                // All fixed - hide errors row
+                document.getElementById('summaryErrorsRow').classList.add('hidden');
+                resultEl.textContent = 'All errors resolved!';
+                resultEl.className = 'mt-2 text-sm text-center text-green-700 font-medium';
+                resultEl.classList.remove('hidden');
+            }
+
+            // Reload results to reflect changes
+            reloadResults();
+        });
+
+        eventSource.addEventListener('error', (e) => {
+            eventSource.close();
+            spinner.classList.add('hidden');
+            retryBtn.disabled = false;
+            btnText.textContent = 'Retry failed items';
+            resultEl.textContent = 'Retry failed. Please try again.';
+            resultEl.className = 'mt-2 text-sm text-center text-red-600';
+            resultEl.classList.remove('hidden');
+        });
+
+        eventSource.onerror = () => {
+            eventSource.close();
+            spinner.classList.add('hidden');
+            retryBtn.disabled = false;
+            btnText.textContent = 'Retry failed items';
+        };
+    }
+
+    async function reloadResults() {
+        try {
+            const response = await fetch(`/api/scrape/results/${sessionId}`);
+            if (!response.ok) return;
+
+            const data = await response.json();
+            allDocuments = data.documents || [];
+            hasMorePages = data.has_more_pages || false;
+            pagesRemaining = data.pages_remaining || 0;
+
+            updateSummaryText(data);
+            filterDocuments();
+        } catch (error) {
+            console.error('Error reloading results:', error);
+        }
     }
 
     function formatDuration(seconds) {
@@ -1125,6 +1325,9 @@
             inaccessibleWarning.classList.add('hidden');
             unknownWarning.classList.add('hidden');
         }
+
+        // Re-validate path (disk space may have changed with selection)
+        debouncedValidatePath();
     }
 
     function formatFileSize(bytes) {
@@ -1133,129 +1336,6 @@
         const i = Math.floor(Math.log(bytes) / Math.log(1024));
         const size = bytes / Math.pow(1024, i);
         return `${size.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
-    }
-
-    async function calculateSizes() {
-        // Get URLs of selected accessible files with unknown sizes
-        const urlsToCalculate = [];
-        allDocuments.forEach(doc => {
-            if (selectedDocuments.has(doc.url) && doc.file_size_bytes == null && doc.is_accessible !== false) {
-                urlsToCalculate.push(doc.url);
-            }
-        });
-
-        if (urlsToCalculate.length === 0) {
-            return;
-        }
-
-        // Update UI elements
-        const btn = document.getElementById('calculateSizesBtn');
-        const btnText = document.getElementById('calculateSizesBtnText');
-        const progressDiv = document.getElementById('calculateSizesProgress');
-        const progressBar = document.getElementById('calculateSizesBar');
-        const statusEl = document.getElementById('calculateSizesStatus');
-        const completedEl = document.getElementById('calculateSizesCompleted');
-        const totalEl = document.getElementById('calculateSizesTotal');
-        const currentFileEl = document.getElementById('calculateSizesCurrentFile');
-
-        btn.disabled = true;
-        btn.classList.add('hidden');
-        progressDiv.classList.remove('hidden');
-        progressBar.style.width = '0%';
-        statusEl.textContent = 'Starting...';
-        completedEl.textContent = '0';
-        totalEl.textContent = urlsToCalculate.length;
-        currentFileEl.textContent = '';
-
-        try {
-            const response = await fetch(`/api/scrape/calculate-sizes/${sessionId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ urls: urlsToCalculate })
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to calculate sizes');
-            }
-
-            // Read SSE stream
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            let finalData = null;
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); // Keep incomplete line in buffer
-
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        try {
-                            const data = JSON.parse(line.slice(6));
-
-                            if (data.completed !== undefined) {
-                                // Progress update
-                                const percent = (data.completed / data.total) * 100;
-                                progressBar.style.width = `${percent}%`;
-                                completedEl.textContent = data.completed;
-                                statusEl.textContent = `${data.known_count} sizes found (${data.total_display})`;
-                                currentFileEl.textContent = data.current_url;
-                            }
-
-                            if (data.files !== undefined) {
-                                // Complete event
-                                finalData = data;
-                            }
-                        } catch (e) {
-                            // Ignore parse errors
-                        }
-                    }
-                }
-            }
-
-            if (finalData) {
-                progressBar.style.width = '100%';
-
-                // Update document sizes in allDocuments
-                finalData.files.forEach(result => {
-                    const doc = allDocuments.find(d => d.url === result.url);
-                    if (doc && result.size_bytes != null) {
-                        doc.file_size_bytes = result.size_bytes;
-                        doc.file_size_display = result.size_display;
-                    }
-                });
-
-                // Re-render to show updated sizes (maintains current filters)
-                filterDocuments();
-                updateSelectionUI();
-
-                // Show result
-                if (finalData.unknown_count > 0) {
-                    statusEl.textContent = `Done: ${finalData.known_count} found, ${finalData.unknown_count} unknown`;
-                } else {
-                    statusEl.textContent = `Done: All ${finalData.known_count} sizes calculated!`;
-                    setTimeout(() => {
-                        document.getElementById('unknownSizeWarning').classList.add('hidden');
-                    }, 2000);
-                }
-                currentFileEl.textContent = `Total: ${finalData.total_display}`;
-            }
-
-        } catch (error) {
-            console.error('Error calculating sizes:', error);
-            statusEl.textContent = 'Calculation failed';
-        } finally {
-            setTimeout(() => {
-                btn.disabled = false;
-                btn.classList.remove('hidden');
-                progressDiv.classList.add('hidden');
-                progressBar.style.width = '0%';
-            }, 3000);
-        }
     }
 
     function filterDocuments() {
@@ -1277,29 +1357,90 @@
         renderDocuments(filtered);
     }
 
+    let validatePathTimer = null;
+    let lastPathValidation = null;
+
+    function debouncedValidatePath() {
+        clearTimeout(validatePathTimer);
+        validatePathTimer = setTimeout(validatePath, 400);
+    }
+
+    function getRequiredBytes() {
+        let total = 0;
+        allDocuments.forEach(doc => {
+            if (selectedDocuments.has(doc.url) && doc.file_size_bytes) {
+                total += doc.file_size_bytes;
+            }
+        });
+        return total;
+    }
+
     async function validatePath() {
         const path = document.getElementById('downloadPath').value;
         const statusEl = document.getElementById('pathStatus');
+
+        if (!path.trim()) {
+            statusEl.innerHTML = '';
+            statusEl.className = 'mt-1 text-sm text-gray-500';
+            lastPathValidation = null;
+            return;
+        }
 
         try {
             const response = await fetch('/api/download/validate-path', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path })
+                body: JSON.stringify({ path, required_bytes: getRequiredBytes() })
             });
 
             const data = await response.json();
+            lastPathValidation = data;
 
-            if (data.valid) {
-                statusEl.textContent = data.message;
-                statusEl.className = 'mt-1 text-sm text-green-600';
+            if (data.valid && data.error_code !== 'not_exists') {
+                let msg = data.message;
+                if (data.free_space_display) {
+                    msg += ` (${data.free_space_display} free)`;
+                }
+                statusEl.innerHTML = `<span class="text-green-600">${msg}</span>`;
+            } else if (data.error_code === 'not_exists') {
+                let msg = `<span class="text-amber-600">Directory does not exist.</span> `;
+                msg += `<button onclick="createDirectory()" class="text-blue-600 hover:text-blue-800 underline font-medium">Create it</button>`;
+                statusEl.innerHTML = msg;
+            } else if (data.error_code === 'not_writable') {
+                statusEl.innerHTML = `<span class="text-red-600">Directory is not writable. Choose a different location.</span>`;
+            } else if (data.error_code === 'insufficient_space') {
+                statusEl.innerHTML = `<span class="text-red-600">${data.message}</span>`;
             } else {
-                statusEl.textContent = data.message;
-                statusEl.className = 'mt-1 text-sm text-red-600';
+                statusEl.innerHTML = `<span class="text-red-600">${data.message}</span>`;
             }
         } catch (error) {
-            statusEl.textContent = 'Failed to validate path';
-            statusEl.className = 'mt-1 text-sm text-red-600';
+            statusEl.innerHTML = '<span class="text-red-600">Failed to validate path</span>';
+            lastPathValidation = null;
+        }
+    }
+
+    async function createDirectory() {
+        const path = document.getElementById('downloadPath').value;
+        const statusEl = document.getElementById('pathStatus');
+
+        statusEl.innerHTML = '<span class="text-gray-500">Creating directory...</span>';
+
+        try {
+            const response = await fetch('/api/download/create-directory', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path })
+            });
+
+            if (response.ok) {
+                // Re-validate to show the green success state
+                await validatePath();
+            } else {
+                const data = await response.json();
+                statusEl.innerHTML = `<span class="text-red-600">Failed to create directory: ${data.detail}</span>`;
+            }
+        } catch (error) {
+            statusEl.innerHTML = '<span class="text-red-600">Failed to create directory</span>';
         }
     }
 

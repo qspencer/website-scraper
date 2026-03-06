@@ -28,15 +28,26 @@ def format_file_size(size_bytes: Optional[int]) -> Optional[str]:
     return f"{size:.1f} {units[unit_index]}"
 
 
-def validate_download_path(path: str) -> Tuple[bool, str, Optional[str]]:
+def validate_download_path(path: str, required_bytes: int = 0) -> dict:
     """
     Validate a download path.
 
     Returns:
-        Tuple of (is_valid, message, absolute_path)
+        dict with keys: valid, message, absolute_path, error_code, free_space_bytes, free_space_display
     """
+    result = {
+        "valid": False,
+        "message": "",
+        "absolute_path": None,
+        "error_code": None,
+        "free_space_bytes": None,
+        "free_space_display": None,
+    }
+
     if not path:
-        return False, "Download path cannot be empty", None
+        result["message"] = "Download path cannot be empty"
+        result["error_code"] = "empty"
+        return result
 
     path = path.strip()
 
@@ -45,12 +56,7 @@ def validate_download_path(path: str) -> Tuple[bool, str, Optional[str]]:
 
     # Convert to absolute path
     abs_path = os.path.abspath(path)
-
-    # Security: prevent path traversal attacks
-    # Check for suspicious patterns
-    if ".." in path:
-        # Allow .. but resolve to absolute and verify it's reasonable
-        pass
+    result["absolute_path"] = abs_path
 
     try:
         path_obj = Path(abs_path)
@@ -58,26 +64,66 @@ def validate_download_path(path: str) -> Tuple[bool, str, Optional[str]]:
         # Check if path exists
         if path_obj.exists():
             if not path_obj.is_dir():
-                return False, "Path exists but is not a directory", None
+                result["message"] = "Path exists but is not a directory"
+                result["error_code"] = "not_directory"
+                return result
             if not os.access(abs_path, os.W_OK):
-                return False, "Directory exists but is not writable", None
-            return True, "Directory exists and is writable", abs_path
+                result["message"] = "Directory exists but is not writable"
+                result["error_code"] = "not_writable"
+                return result
+            # Directory exists and is writable - check space
+            return _check_disk_space(result, abs_path, required_bytes)
 
-        # Path doesn't exist - check if we can create it
-        # Find the first existing parent
+        # Path doesn't exist - check if parent is writable
         parent = path_obj.parent
         while not parent.exists() and parent != parent.parent:
             parent = parent.parent
 
         if parent.exists():
             if not os.access(str(parent), os.W_OK):
-                return False, f"Cannot create directory: parent '{parent}' is not writable", None
-            return True, "Directory will be created", abs_path
+                result["message"] = f"Cannot create directory: parent '{parent}' is not writable"
+                result["error_code"] = "not_writable"
+                return result
+            # Parent writable, directory will need to be created
+            result["error_code"] = "not_exists"
+            result["message"] = "Directory does not exist"
+            # Check space on the parent that exists
+            return _check_disk_space(result, str(parent), required_bytes, dir_needs_creation=True)
         else:
-            return False, "Invalid path: no accessible parent directory", None
+            result["message"] = "Invalid path: no accessible parent directory"
+            result["error_code"] = "invalid"
+            return result
 
     except Exception as e:
-        return False, f"Invalid path: {str(e)}", None
+        result["message"] = f"Invalid path: {str(e)}"
+        result["error_code"] = "invalid"
+        return result
+
+
+def _check_disk_space(result: dict, check_path: str, required_bytes: int, dir_needs_creation: bool = False) -> dict:
+    """Check disk space and update result dict."""
+    try:
+        stat = os.statvfs(check_path)
+        free_bytes = stat.f_bavail * stat.f_frsize
+        result["free_space_bytes"] = free_bytes
+        result["free_space_display"] = format_file_size(free_bytes)
+
+        if required_bytes > 0 and free_bytes < required_bytes:
+            result["valid"] = False
+            result["message"] = f"Not enough disk space. Need {format_file_size(required_bytes)}, only {format_file_size(free_bytes)} available"
+            result["error_code"] = "insufficient_space"
+            return result
+    except OSError:
+        pass  # Can't check space, proceed anyway
+
+    if dir_needs_creation:
+        result["valid"] = True
+        result["message"] = "Directory will be created"
+        result["error_code"] = "not_exists"
+    else:
+        result["valid"] = True
+        result["message"] = "Directory exists and is writable"
+    return result
 
 
 def ensure_directory_exists(path: str) -> Tuple[bool, str]:
