@@ -26,5 +26,14 @@ class Settings(BaseSettings):
     # History
     SCAN_HISTORY_LIMIT: int = 20
 
+    # MongoDB
+    MONGODB_URI: str = "mongodb://localhost:27017"
+    MONGODB_DATABASE: str = "document_scraper"
+
+    # AI summarization (Phase 3 prep)
+    AI_API_URL: str = ""
+    AI_API_KEY: str = ""
+    AI_MODEL: str = ""
+
 
 settings = Settings()

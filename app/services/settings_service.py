@@ -23,6 +23,11 @@ class RuntimeSettings:
         "max_crawl_depth": default_settings.MAX_CRAWL_DEPTH,
         "max_concurrent_requests": default_settings.MAX_CONCURRENT_REQUESTS,
         "scan_history_limit": default_settings.SCAN_HISTORY_LIMIT,
+        "mongodb_uri": default_settings.MONGODB_URI,
+        "mongodb_database": default_settings.MONGODB_DATABASE,
+        "ai_api_url": default_settings.AI_API_URL,
+        "ai_api_key": default_settings.AI_API_KEY,
+        "ai_model": default_settings.AI_MODEL,
     }
 
     def __init__(self):
@@ -138,6 +143,59 @@ class RuntimeSettings:
         self._settings["scan_history_limit"] = value
         self._save_setting("scan_history_limit", value)
         logger.info(f"scan_history_limit set to {value}")
+
+    @property
+    def mongodb_uri(self) -> str:
+        return self._settings["mongodb_uri"]
+
+    @mongodb_uri.setter
+    def mongodb_uri(self, value: str):
+        self._settings["mongodb_uri"] = value.strip()
+        self._save_setting("mongodb_uri", value.strip())
+        logger.info("mongodb_uri updated")
+
+    @property
+    def mongodb_database(self) -> str:
+        return self._settings["mongodb_database"]
+
+    @mongodb_database.setter
+    def mongodb_database(self, value: str):
+        value = value.strip()
+        if not value:
+            value = "document_scraper"
+        self._settings["mongodb_database"] = value
+        self._save_setting("mongodb_database", value)
+        logger.info(f"mongodb_database set to {value}")
+
+    @property
+    def ai_api_url(self) -> str:
+        return self._settings["ai_api_url"]
+
+    @ai_api_url.setter
+    def ai_api_url(self, value: str):
+        self._settings["ai_api_url"] = value.strip()
+        self._save_setting("ai_api_url", value.strip())
+        logger.info("ai_api_url updated")
+
+    @property
+    def ai_api_key(self) -> str:
+        return self._settings["ai_api_key"]
+
+    @ai_api_key.setter
+    def ai_api_key(self, value: str):
+        self._settings["ai_api_key"] = value.strip()
+        self._save_setting("ai_api_key", value.strip())
+        logger.info("ai_api_key updated")
+
+    @property
+    def ai_model(self) -> str:
+        return self._settings["ai_model"]
+
+    @ai_model.setter
+    def ai_model(self, value: str):
+        self._settings["ai_model"] = value.strip()
+        self._save_setting("ai_model", value.strip())
+        logger.info(f"ai_model set to {value.strip()}")
 
     def get_all(self) -> Dict[str, Any]:
         """Get all settings as a dictionary."""

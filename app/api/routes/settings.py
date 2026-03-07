@@ -22,6 +22,11 @@ class SettingsUpdate(BaseModel):
     max_crawl_depth: Optional[int] = None
     max_concurrent_requests: Optional[int] = None
     scan_history_limit: Optional[int] = None
+    mongodb_uri: Optional[str] = None
+    mongodb_database: Optional[str] = None
+    ai_api_url: Optional[str] = None
+    ai_api_key: Optional[str] = None
+    ai_model: Optional[str] = None
 
 
 class SettingsResponse(BaseModel):
@@ -33,6 +38,11 @@ class SettingsResponse(BaseModel):
     max_crawl_depth: int
     max_concurrent_requests: int
     scan_history_limit: int
+    mongodb_uri: str
+    mongodb_database: str
+    ai_api_url: str
+    ai_api_key: str
+    ai_model: str
 
 
 @router.get("", response_model=SettingsResponse)

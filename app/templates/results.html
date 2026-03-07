@@ -160,8 +160,31 @@
             <h2 class="text-lg font-semibold text-gray-800 mb-4">Download Selected Documents</h2>
 
             <div class="space-y-4">
-                <!-- Download Path -->
+                <!-- Download Destination Toggle -->
                 <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Download To</label>
+                    <div class="flex rounded-lg border border-gray-300 overflow-hidden">
+                        <button
+                            type="button"
+                            id="destFileSystem"
+                            onclick="setDownloadDestination('filesystem')"
+                            class="flex-1 py-2 px-4 text-sm font-medium bg-blue-600 text-white transition"
+                        >
+                            File System
+                        </button>
+                        <button
+                            type="button"
+                            id="destMongoDB"
+                            onclick="setDownloadDestination('mongodb')"
+                            class="flex-1 py-2 px-4 text-sm font-medium bg-white text-gray-700 hover:bg-gray-50 transition"
+                        >
+                            MongoDB
+                        </button>
+                    </div>
+                </div>
+
+                <!-- File System Options -->
+                <div id="filesystemOptions">
                     <label for="downloadPath" class="block text-sm font-medium text-gray-700 mb-2">
                         Download Location
                     </label>
@@ -174,6 +197,18 @@
                         oninput="debouncedValidatePath()"
                     >
                     <div id="pathStatus" class="mt-1 text-sm text-gray-500"></div>
+                </div>
+
+                <!-- MongoDB Options -->
+                <div id="mongodbOptions" class="hidden">
+                    <div id="mongodbStatus" class="flex items-center gap-2 p-3 rounded-lg bg-gray-50 border border-gray-200">
+                        <div id="mongodbStatusDot" class="w-2.5 h-2.5 rounded-full bg-gray-400"></div>
+                        <span id="mongodbStatusText" class="text-sm text-gray-600">Checking MongoDB connection...</span>
+                    </div>
+                    <p class="mt-2 text-xs text-gray-500">
+                        Documents will be stored in MongoDB with extracted text for searching.
+                        <a href="/settings" class="text-blue-600 hover:text-blue-800 underline">Configure MongoDB</a>
+                    </p>
                 </div>
 
                 <!-- Download Size Info -->
@@ -249,6 +284,47 @@
             <button
                 id="downloadOverlayBtn"
                 onclick="closeDownloadOverlay()"
+                class="w-full py-2 px-4 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition"
+            >
+                Cancel
+            </button>
+        </div>
+    </div>
+
+    <!-- MongoDB Download Progress Overlay -->
+    <div id="mongodbOverlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">Storing in MongoDB</h2>
+
+            <!-- Progress Bar -->
+            <div class="h-2 bg-gray-200 rounded-full overflow-hidden mb-4">
+                <div id="mongoProgressBar" class="h-full bg-green-600 transition-all duration-300" style="width: 0%"></div>
+            </div>
+
+            <!-- Current File -->
+            <p id="mongoCurrentFile" class="text-sm text-gray-600 mb-2 truncate">Preparing...</p>
+
+            <!-- Stats -->
+            <div class="flex justify-between text-sm text-gray-500 mb-4">
+                <span>Progress: <span id="mongoProgress" class="font-medium">0/0</span></span>
+                <span class="text-red-500">Failed: <span id="mongoFailed" class="font-medium">0</span></span>
+            </div>
+
+            <!-- Summarization Note -->
+            <div id="mongoSummarizationNote" class="hidden mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+                <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-blue-600 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span>AI summarization running in the background. You can close this dialog.</span>
+                </div>
+            </div>
+
+            <!-- Cancel/Close Button -->
+            <button
+                id="mongoOverlayBtn"
+                onclick="closeMongoOverlay()"
                 class="w-full py-2 px-4 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition"
             >
                 Cancel
@@ -388,6 +464,9 @@
     let filteredDocuments = [];
     let selectedDocuments = new Set();
     let downloadEventSource = null;
+    let mongoEventSource = null;
+    let downloadDestination = 'filesystem';
+    let mongodbConnected = false;
     let hasMorePages = false;
     let pagesRemaining = 0;
     let autoscanEnabled = false;
@@ -1276,8 +1355,10 @@
         const inaccessibleWarning = document.getElementById('inaccessibleWarning');
 
         if (count > 0) {
-            btn.disabled = false;
-            btnText.textContent = `Download ${count} file${count !== 1 ? 's' : ''}`;
+            const destLabel = downloadDestination === 'mongodb' ? 'Store' : 'Download';
+            const canDownload = downloadDestination === 'filesystem' || mongodbConnected;
+            btn.disabled = !canDownload;
+            btnText.textContent = `${destLabel} ${count} file${count !== 1 ? 's' : ''}`;
 
             // Calculate total size
             let totalBytes = 0;
@@ -1447,6 +1528,10 @@
     async function startDownload() {
         if (selectedDocuments.size === 0) return;
 
+        if (downloadDestination === 'mongodb') {
+            return startMongoDownload();
+        }
+
         const downloadPath = document.getElementById('downloadPath').value;
 
         try {
@@ -1517,6 +1602,150 @@
             downloadEventSource = null;
         }
         document.getElementById('downloadOverlay').classList.add('hidden');
+    }
+
+    // --- Download Destination Toggle ---
+    function updateDownloadButton() {
+        updateSelectionUI();
+    }
+
+    function setDownloadDestination(dest) {
+        downloadDestination = dest;
+        const fsBtn = document.getElementById('destFileSystem');
+        const mongoBtn = document.getElementById('destMongoDB');
+        const fsOptions = document.getElementById('filesystemOptions');
+        const mongoOptions = document.getElementById('mongodbOptions');
+
+        if (dest === 'filesystem') {
+            fsBtn.className = 'flex-1 py-2 px-4 text-sm font-medium bg-blue-600 text-white transition';
+            mongoBtn.className = 'flex-1 py-2 px-4 text-sm font-medium bg-white text-gray-700 hover:bg-gray-50 transition';
+            fsOptions.classList.remove('hidden');
+            mongoOptions.classList.add('hidden');
+        } else {
+            mongoBtn.className = 'flex-1 py-2 px-4 text-sm font-medium bg-blue-600 text-white transition';
+            fsBtn.className = 'flex-1 py-2 px-4 text-sm font-medium bg-white text-gray-700 hover:bg-gray-50 transition';
+            fsOptions.classList.add('hidden');
+            mongoOptions.classList.remove('hidden');
+            checkMongoStatus();
+        }
+        updateDownloadButton();
+    }
+
+    async function checkMongoStatus() {
+        const dot = document.getElementById('mongodbStatusDot');
+        const text = document.getElementById('mongodbStatusText');
+        dot.className = 'w-2.5 h-2.5 rounded-full bg-gray-400 animate-pulse';
+        text.textContent = 'Checking MongoDB connection...';
+
+        try {
+            const response = await fetch('/api/download/mongodb/status');
+            const result = await response.json();
+            if (result.connected) {
+                mongodbConnected = true;
+                dot.className = 'w-2.5 h-2.5 rounded-full bg-green-500';
+                text.innerHTML = result.message;
+                text.className = 'text-sm text-green-700';
+            } else {
+                mongodbConnected = false;
+                dot.className = 'w-2.5 h-2.5 rounded-full bg-red-500';
+                let html = result.message;
+                if (result.help_url) {
+                    html += ` <a href="${result.help_url}" target="_blank" rel="noopener" class="text-blue-600 hover:text-blue-800 underline">Installation guide &rarr;</a>`;
+                }
+                text.innerHTML = html;
+                text.className = 'text-sm text-red-600';
+            }
+        } catch (error) {
+            mongodbConnected = false;
+            dot.className = 'w-2.5 h-2.5 rounded-full bg-red-500';
+            text.textContent = 'Failed to check MongoDB status';
+            text.className = 'text-sm text-red-600';
+        }
+        updateDownloadButton();
+    }
+
+    async function startMongoDownload() {
+        if (selectedDocuments.size === 0) return;
+
+        try {
+            const response = await fetch('/api/download/mongodb/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: sessionId,
+                    document_urls: Array.from(selectedDocuments),
+                    download_path: 'mongodb'
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                alert(error.detail || 'Failed to start MongoDB download');
+                return;
+            }
+
+            const data = await response.json();
+            const mongoSessionId = data.session_id;
+
+            // Show MongoDB overlay
+            document.getElementById('mongodbOverlay').classList.remove('hidden');
+            document.getElementById('mongoProgressBar').style.width = '0%';
+            document.getElementById('mongoCurrentFile').textContent = 'Starting...';
+            document.getElementById('mongoProgress').textContent = `0/${selectedDocuments.size}`;
+            document.getElementById('mongoFailed').textContent = '0';
+            document.getElementById('mongoOverlayBtn').textContent = 'Cancel';
+            document.getElementById('mongoSummarizationNote').classList.add('hidden');
+
+            // Connect to SSE
+            mongoEventSource = new EventSource(`/api/download/mongodb/progress/${mongoSessionId}`);
+
+            mongoEventSource.addEventListener('downloading', (e) => {
+                const data = JSON.parse(e.data);
+                const percent = (data.current_file_index / data.total_files) * 100;
+                document.getElementById('mongoProgressBar').style.width = `${percent}%`;
+                document.getElementById('mongoCurrentFile').textContent = `Storing: ${data.current_file}`;
+                document.getElementById('mongoProgress').textContent = `${data.files_completed}/${data.total_files}`;
+                document.getElementById('mongoFailed').textContent = data.files_failed;
+            });
+
+            mongoEventSource.addEventListener('complete', (e) => {
+                const data = JSON.parse(e.data);
+                mongoEventSource.close();
+                document.getElementById('mongoProgressBar').style.width = '100%';
+                document.getElementById('mongoCurrentFile').textContent = data.message;
+                document.getElementById('mongoProgress').textContent = `${data.files_completed}/${data.total_files}`;
+                document.getElementById('mongoFailed').textContent = data.files_failed;
+                document.getElementById('mongoOverlayBtn').textContent = 'Close';
+
+                if (data.summarization_started) {
+                    document.getElementById('mongoSummarizationNote').classList.remove('hidden');
+                }
+            });
+
+            mongoEventSource.addEventListener('cancelled', (e) => {
+                mongoEventSource.close();
+                document.getElementById('mongoCurrentFile').textContent = 'Download cancelled';
+                document.getElementById('mongoOverlayBtn').textContent = 'Close';
+            });
+
+            mongoEventSource.addEventListener('error', (e) => {
+                mongoEventSource.close();
+                document.getElementById('mongoCurrentFile').textContent = 'Download failed';
+                document.getElementById('mongoOverlayBtn').textContent = 'Close';
+            });
+
+        } catch (error) {
+            console.error('Error:', error);
+            alert('Failed to start MongoDB download');
+        }
+    }
+
+    function closeMongoOverlay() {
+        if (mongoEventSource) {
+            mongoEventSource.close();
+            mongoEventSource = null;
+        }
+        document.getElementById('mongodbOverlay').classList.add('hidden');
     }
 </script>
 {% endblock %}

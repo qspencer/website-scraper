@@ -150,6 +150,96 @@
                 <p class="mt-1 text-sm text-gray-500">Number of past scans to keep in history.</p>
             </div>
 
+            <!-- MongoDB Section -->
+            <div class="pt-4 border-t">
+                <h2 class="text-lg font-semibold text-gray-800 mb-4">MongoDB Storage</h2>
+
+                <div class="space-y-4">
+                    <div>
+                        <label for="mongodb_uri" class="block text-sm font-medium text-gray-700 mb-2">
+                            MongoDB Connection URI
+                        </label>
+                        <input
+                            type="text"
+                            id="mongodb_uri"
+                            name="mongodb_uri"
+                            value="{{ settings.mongodb_uri }}"
+                            placeholder="mongodb://localhost:27017"
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                        >
+                        <div class="flex items-center gap-2 mt-1">
+                            <button type="button" onclick="testMongoConnection()" class="text-sm text-blue-600 hover:text-blue-800 underline">Test Connection</button>
+                            <span id="mongoStatus" class="text-sm"></span>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label for="mongodb_database" class="block text-sm font-medium text-gray-700 mb-2">
+                            Database Name
+                        </label>
+                        <input
+                            type="text"
+                            id="mongodb_database"
+                            name="mongodb_database"
+                            value="{{ settings.mongodb_database }}"
+                            placeholder="document_scraper"
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                        >
+                    </div>
+                </div>
+            </div>
+
+            <!-- AI Service Section -->
+            <div class="pt-4 border-t">
+                <h2 class="text-lg font-semibold text-gray-800 mb-4">AI Summarization</h2>
+                <p class="text-sm text-gray-500 mb-4">Configure an AI service to automatically summarize documents stored in MongoDB.</p>
+
+                <div class="space-y-4">
+                    <div>
+                        <label for="ai_api_url" class="block text-sm font-medium text-gray-700 mb-2">
+                            API URL
+                        </label>
+                        <input
+                            type="text"
+                            id="ai_api_url"
+                            name="ai_api_url"
+                            value="{{ settings.ai_api_url }}"
+                            placeholder="https://api.anthropic.com/v1/messages"
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                        >
+                    </div>
+
+                    <div>
+                        <label for="ai_api_key" class="block text-sm font-medium text-gray-700 mb-2">
+                            API Key
+                        </label>
+                        <input
+                            type="password"
+                            id="ai_api_key"
+                            name="ai_api_key"
+                            value="{{ settings.ai_api_key }}"
+                            placeholder="sk-..."
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                        >
+                    </div>
+
+                    <div>
+                        <label for="ai_model" class="block text-sm font-medium text-gray-700 mb-2">
+                            Model
+                        </label>
+                        <input
+                            type="text"
+                            id="ai_model"
+                            name="ai_model"
+                            value="{{ settings.ai_model }}"
+                            placeholder="claude-haiku-4-5-20251001"
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                        >
+                        <p class="mt-1 text-sm text-gray-500">The model to use for document summarization.</p>
+                    </div>
+                </div>
+            </div>
+
             <!-- Buttons -->
             <div class="flex gap-4 pt-4 border-t">
                 <button
@@ -188,6 +278,11 @@
             default_crawl_depth: parseInt(form.default_crawl_depth.value),
             max_crawl_depth: parseInt(form.max_crawl_depth.value),
             scan_history_limit: parseInt(form.scan_history_limit.value),
+            mongodb_uri: form.mongodb_uri.value,
+            mongodb_database: form.mongodb_database.value,
+            ai_api_url: form.ai_api_url.value,
+            ai_api_key: form.ai_api_key.value,
+            ai_model: form.ai_model.value,
         };
 
         try {
@@ -240,6 +335,35 @@
         document.getElementById('default_crawl_depth').value = settings.default_crawl_depth;
         document.getElementById('max_crawl_depth').value = settings.max_crawl_depth;
         document.getElementById('scan_history_limit').value = settings.scan_history_limit;
+        document.getElementById('mongodb_uri').value = settings.mongodb_uri;
+        document.getElementById('mongodb_database').value = settings.mongodb_database;
+        document.getElementById('ai_api_url').value = settings.ai_api_url;
+        document.getElementById('ai_api_key').value = settings.ai_api_key;
+        document.getElementById('ai_model').value = settings.ai_model;
+    }
+
+    async function testMongoConnection() {
+        const statusEl = document.getElementById('mongoStatus');
+        statusEl.textContent = 'Testing...';
+        statusEl.className = 'text-sm text-gray-500';
+
+        try {
+            const response = await fetch('/api/download/mongodb/status');
+            const result = await response.json();
+
+            if (result.connected) {
+                statusEl.innerHTML = `<span class="text-green-600">${result.message}</span>`;
+            } else {
+                let html = `<span class="text-red-600">${result.message}</span>`;
+                if (result.help_url) {
+                    html += ` <a href="${result.help_url}" target="_blank" rel="noopener" class="text-blue-600 hover:text-blue-800 underline">Installation guide &rarr;</a>`;
+                }
+                statusEl.innerHTML = html;
+            }
+        } catch (error) {
+            statusEl.textContent = 'Error: ' + error.message;
+            statusEl.className = 'text-sm text-red-600';
+        }
     }
 
     function showStatus(message, type) {
