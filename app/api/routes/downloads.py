@@ -1,9 +1,12 @@
 import asyncio
+import csv
+import io
 import json
 import uuid
 from typing import Dict, List
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 
 from app.core.logging_config import get_logger
@@ -408,6 +411,216 @@ async def start_summarization():
 
     asyncio.create_task(ai_summarization_service.summarize_pending_documents())
     return {"message": "Summarization started in background", "started": True}
+
+
+@router.get("/mongodb/search")
+async def search_mongodb_documents(
+    q: str = "",
+    scan_url: str = "",
+    extension: str = "",
+    limit: int = 50,
+):
+    """Search stored documents by text query and/or filters."""
+    try:
+        results = mongodb_service.search_documents(
+            query=q,
+            scan_url=scan_url or None,
+            extension=extension or None,
+            limit=min(limit, 200),
+        )
+        return {"results": results, "count": len(results)}
+    except Exception as e:
+        logger.error(f"Search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Search failed: {e}")
+
+
+@router.get("/mongodb/scans")
+async def get_stored_scans():
+    """Get distinct scan URLs with document counts."""
+    try:
+        col = mongodb_service._get_collection()
+        pipeline = [
+            {"$group": {
+                "_id": "$scan_url",
+                "count": {"$sum": 1},
+                "latest": {"$max": "$downloaded_at"},
+            }},
+            {"$sort": {"latest": -1}},
+        ]
+        scans = []
+        for row in col.aggregate(pipeline):
+            scans.append({
+                "scan_url": row["_id"],
+                "document_count": row["count"],
+                "latest_download": row["latest"].isoformat() if row.get("latest") else None,
+            })
+        return {"scans": scans}
+    except Exception as e:
+        logger.error(f"Failed to get scans: {e}")
+        return {"scans": []}
+
+
+@router.get("/mongodb/scan/summary-stats")
+async def scan_summary_stats(scan_url: str):
+    """Get summary stats for a specific scan."""
+    try:
+        stats = mongodb_service.get_scan_summary_stats(scan_url)
+        return stats
+    except Exception as e:
+        logger.error(f"Failed to get scan summary stats: {e}")
+        return {"pending": 0, "complete": 0, "failed": 0, "skipped": 0}
+
+
+@router.post("/mongodb/scan/summarize")
+async def summarize_scan(request: dict):
+    """Start or restart summarization for a specific scan."""
+    scan_url = request.get("scan_url", "")
+    recreate = request.get("recreate", False)
+
+    if not scan_url:
+        raise HTTPException(status_code=400, detail="scan_url is required")
+
+    if not runtime_settings.ai_api_url or not runtime_settings.ai_api_key or not runtime_settings.ai_model:
+        raise HTTPException(
+            status_code=400,
+            detail="AI API is not configured. Set the API URL, key, and model in Settings.",
+        )
+
+    if recreate:
+        reset_count = mongodb_service.reset_scan_summaries(scan_url)
+        logger.info(f"Reset {reset_count} summaries for scan: {scan_url}")
+
+    if ai_summarization_service.is_running():
+        return {"message": "Summarization is already running", "started": False}
+
+    asyncio.create_task(ai_summarization_service.summarize_pending_documents())
+    return {"message": "Summarization started in background", "started": True}
+
+
+@router.post("/mongodb/scan/retry-failed")
+async def retry_scan_failed(request: dict):
+    """Retry failed summaries for a specific scan."""
+    scan_url = request.get("scan_url", "")
+    if not scan_url:
+        raise HTTPException(status_code=400, detail="scan_url is required")
+
+    if not runtime_settings.ai_api_url or not runtime_settings.ai_api_key or not runtime_settings.ai_model:
+        raise HTTPException(
+            status_code=400,
+            detail="AI API is not configured. Set the API URL, key, and model in Settings.",
+        )
+
+    reset_count = mongodb_service.reset_scan_failed_summaries(scan_url)
+    logger.info(f"Reset {reset_count} failed summaries for scan: {scan_url}")
+
+    if reset_count == 0:
+        return {"message": "No failed summaries to retry", "reset_count": 0, "started": False}
+
+    if ai_summarization_service.is_running():
+        return {
+            "message": f"Reset {reset_count} failed summaries. Summarization is already running and will pick them up.",
+            "reset_count": reset_count,
+            "started": False,
+        }
+
+    asyncio.create_task(ai_summarization_service.summarize_pending_documents())
+    return {
+        "message": f"Reset {reset_count} failed summaries, retrying in background",
+        "reset_count": reset_count,
+        "started": True,
+    }
+
+
+@router.get("/mongodb/scan/failed-details")
+async def get_scan_failed_details(scan_url: str = ""):
+    """Get details of failed summarizations for a specific scan."""
+    if not scan_url:
+        raise HTTPException(status_code=400, detail="scan_url is required")
+
+    try:
+        failures = mongodb_service.get_scan_failed_summary_errors(scan_url)
+        return {"failures": failures, "count": len(failures)}
+    except Exception as e:
+        logger.error(f"Failed to get failure details: {e}")
+        return {"failures": [], "count": 0}
+
+
+@router.get("/mongodb/extensions")
+async def get_document_extensions(scan_url: str = ""):
+    """Get distinct file extensions, optionally filtered by scan URL."""
+    try:
+        col = mongodb_service._get_collection()
+        filter_dict = {}
+        if scan_url:
+            filter_dict["scan_url"] = scan_url
+        extensions = sorted(col.distinct("extension", filter_dict))
+        return {"extensions": extensions}
+    except Exception as e:
+        logger.error(f"Failed to get extensions: {e}")
+        return {"extensions": []}
+
+
+@router.get("/mongodb/document/{doc_id}")
+async def get_document_detail(doc_id: str):
+    """Get full document metadata by ID."""
+    doc = mongodb_service.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
+
+
+@router.delete("/mongodb/document/{doc_id}")
+async def delete_document(doc_id: str):
+    """Delete a document from MongoDB."""
+    deleted = mongodb_service.delete_document(doc_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"message": "Document deleted"}
+
+
+@router.get("/mongodb/export/csv")
+async def export_scan_csv(scan_url: str = ""):
+    """Export documents for a scan as a CSV file."""
+    if not scan_url:
+        raise HTTPException(status_code=400, detail="scan_url query parameter is required")
+
+    try:
+        documents = mongodb_service.get_documents_for_export(scan_url)
+    except Exception as e:
+        logger.error(f"CSV export failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Document Title",
+        "Short Summary",
+        "Document URL",
+        "Filename",
+        "Document Type",
+        "Version",
+    ])
+
+    # Sort alphabetically by title, falling back to filename for untitled docs
+    documents.sort(key=lambda d: (d.get("title") or d.get("filename") or "").lower())
+
+    for doc in documents:
+        writer.writerow([
+            doc.get("title") or "<automated title extraction failed>",
+            doc.get("short_summary") or "<automated summary extraction failed>",
+            doc.get("source_url") or "",
+            doc.get("filename") or "",
+            doc.get("file_type_label") or "",
+            doc.get("version_label") or "",
+        ])
+
+    output.seek(0)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="document_export.csv"'},
+    )
 
 
 @router.post("/mongodb/summarization/retry")

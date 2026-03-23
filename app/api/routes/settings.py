@@ -27,6 +27,7 @@ class SettingsUpdate(BaseModel):
     ai_api_url: Optional[str] = None
     ai_api_key: Optional[str] = None
     ai_model: Optional[str] = None
+    stirling_pdf_url: Optional[str] = None
 
 
 class SettingsResponse(BaseModel):
@@ -43,12 +44,21 @@ class SettingsResponse(BaseModel):
     ai_api_url: str
     ai_api_key: str
     ai_model: str
+    stirling_pdf_url: str
+
+
+def _masked_settings() -> dict:
+    """Return settings with the API key masked for client responses."""
+    all_settings = runtime_settings.get_all()
+    if all_settings.get("ai_api_key"):
+        all_settings["ai_api_key"] = "********"
+    return all_settings
 
 
 @router.get("", response_model=SettingsResponse)
 async def get_settings():
     """Get current settings."""
-    return runtime_settings.get_all()
+    return _masked_settings()
 
 
 @router.put("", response_model=SettingsResponse)
@@ -57,15 +67,29 @@ async def update_settings(updates: SettingsUpdate):
     # Filter out None values
     update_dict = {k: v for k, v in updates.model_dump().items() if v is not None}
 
+    # Don't overwrite non-empty string settings with empty strings.
+    # This prevents password fields (which browsers may clear on page load)
+    # from wiping saved values when the user saves other settings.
+    STRING_KEYS = {"ai_api_url", "ai_api_key", "ai_model", "mongodb_uri", "mongodb_database"}
+    for key in STRING_KEYS:
+        if key in update_dict and update_dict[key] == "":
+            current = getattr(runtime_settings, key, "")
+            if current:
+                del update_dict[key]
+
+    # Ignore masked API key placeholder — means user didn't change it
+    if update_dict.get("ai_api_key") == "********":
+        del update_dict["ai_api_key"]
+
     if update_dict:
-        logger.info(f"Updating settings: {update_dict}")
+        logger.info(f"Updating settings: {list(update_dict.keys())}")
         runtime_settings.update(update_dict)
 
-    return runtime_settings.get_all()
+    return _masked_settings()
 
 
 @router.post("/reset", response_model=SettingsResponse)
 async def reset_settings():
     """Reset settings to defaults."""
     runtime_settings.reset_to_defaults()
-    return runtime_settings.get_all()
+    return _masked_settings()

@@ -28,6 +28,7 @@ class RuntimeSettings:
         "ai_api_url": default_settings.AI_API_URL,
         "ai_api_key": default_settings.AI_API_KEY,
         "ai_model": default_settings.AI_MODEL,
+        "stirling_pdf_url": default_settings.STIRLING_PDF_URL,
     }
 
     def __init__(self):
@@ -196,6 +197,16 @@ class RuntimeSettings:
         self._settings["ai_model"] = value.strip()
         self._save_setting("ai_model", value.strip())
         logger.info(f"ai_model set to {value.strip()}")
+
+    @property
+    def stirling_pdf_url(self) -> str:
+        return self._settings["stirling_pdf_url"]
+
+    @stirling_pdf_url.setter
+    def stirling_pdf_url(self, value: str):
+        self._settings["stirling_pdf_url"] = value.strip().rstrip("/")
+        self._save_setting("stirling_pdf_url", self._settings["stirling_pdf_url"])
+        logger.info("stirling_pdf_url updated")
 
     def get_all(self) -> Dict[str, Any]:
         """Get all settings as a dictionary."""

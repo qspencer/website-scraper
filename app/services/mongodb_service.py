@@ -1,10 +1,12 @@
 """Service for storing and retrieving documents in MongoDB."""
 
+import hashlib
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 
 from app.core.logging_config import get_logger
 from app.services.settings_service import runtime_settings
+from app.utils.document_types import get_document_type_label
 
 logger = get_logger(__name__)
 
@@ -42,8 +44,22 @@ def _get_collection():
 def _ensure_indexes():
     """Create indexes for search and queries."""
     col = _get_collection()
-    col.create_index([("filename", "text"), ("extracted_text", "text")],
-                     name="text_search", default_language="english")
+    # Drop old text index if it exists with different fields
+    try:
+        existing = col.index_information()
+        if "text_search" in existing:
+            weights = existing["text_search"].get("weights", {})
+            if "title" not in weights or "short_summary" not in weights:
+                col.drop_index("text_search")
+                logger.info("Dropped old text_search index to rebuild with new fields")
+    except Exception:
+        pass
+    col.create_index(
+        [("filename", "text"), ("extracted_text", "text"),
+         ("summary", "text"), ("short_summary", "text"),
+         ("title", "text"), ("keywords", "text")],
+        name="text_search", default_language="english",
+    )
     col.create_index("source_url")
     col.create_index("scan_url")
     col.create_index("downloaded_at")
@@ -123,14 +139,81 @@ def store_document(
     """
     Store a document in MongoDB using GridFS.
 
-    Returns the string ID of the created document record.
+    If a document with the same source_url and scan_url already exists,
+    it is replaced (file data and metadata are updated).
+
+    Returns the string ID of the document record.
     """
     import gridfs
 
     db = _get_db()
     fs = gridfs.GridFS(db)
+    col = _get_collection()
 
-    # Store file in GridFS
+    # Compute content hash and file type label
+    content_hash = hashlib.sha256(file_data).hexdigest()
+    file_type_label = get_document_type_label(extension)
+
+    # Check for existing document with the same source URL in this scan
+    existing = col.find_one({"source_url": source_url, "scan_url": scan_url})
+
+    if existing:
+        # Determine version: increment if content changed
+        old_hash = existing.get("content_hash")
+        if old_hash and old_hash == content_hash:
+            version = existing.get("version", 1)
+        else:
+            version = existing.get("version", 0) + 1
+
+        # Delete the old GridFS file
+        try:
+            fs.delete(existing["gridfs_id"])
+        except Exception as e:
+            logger.warning(f"Failed to delete old GridFS file for {filename}: {e}")
+
+        # Store new file in GridFS
+        gridfs_id = fs.put(
+            file_data,
+            filename=filename,
+            content_type=content_type or "application/octet-stream",
+        )
+
+        # Update the existing record
+        update_fields = {
+            "filename": filename,
+            "extension": extension,
+            "file_type_label": file_type_label,
+            "source_page": source_page,
+            "file_size_bytes": file_size_bytes or len(file_data),
+            "content_type": content_type,
+            "gridfs_id": gridfs_id,
+            "downloaded_at": datetime.now(timezone.utc),
+            "extracted_text": extracted_text,
+            "text_extraction_status": text_extraction_status,
+            "content_hash": content_hash,
+            "version": version,
+            "version_label": f"v{version}",
+        }
+
+        # Only reset summaries if content actually changed
+        if old_hash != content_hash:
+            update_fields.update({
+                "title": None,
+                "short_summary": None,
+                "summary": None,
+                "keywords": [],
+                "document_type": None,
+                "summary_status": "pending",
+                "summarized_at": None,
+                "summary_model": None,
+            })
+
+        col.update_one({"_id": existing["_id"]}, {"$set": update_fields})
+
+        logger.info(f"Updated existing document: {filename} (id={existing['_id']}, v{version})")
+        return str(existing["_id"])
+
+    # Store new file in GridFS
     gridfs_id = fs.put(
         file_data,
         filename=filename,
@@ -141,6 +224,7 @@ def store_document(
     doc = {
         "filename": filename,
         "extension": extension,
+        "file_type_label": file_type_label,
         "source_url": source_url,
         "source_page": source_page,
         "scan_url": scan_url,
@@ -150,6 +234,11 @@ def store_document(
         "downloaded_at": datetime.now(timezone.utc),
         "extracted_text": extracted_text,
         "text_extraction_status": text_extraction_status,
+        "content_hash": content_hash,
+        "version": 1,
+        "version_label": "v1",
+        "title": None,
+        "short_summary": None,
         "summary": None,
         "keywords": [],
         "document_type": None,
@@ -158,7 +247,6 @@ def store_document(
         "summary_model": None,
     }
 
-    col = _get_collection()
     result = col.insert_one(doc)
     _ensure_indexes()
 
@@ -275,6 +363,8 @@ def update_summary(
     keywords: List[str],
     document_type: str,
     model: str,
+    title: str = "",
+    short_summary: str = "",
 ) -> bool:
     """Update a document with its AI-generated summary."""
     from bson import ObjectId
@@ -283,10 +373,13 @@ def update_summary(
     result = col.update_one(
         {"_id": ObjectId(doc_id)},
         {"$set": {
+            "title": title,
+            "short_summary": short_summary,
             "summary": summary,
             "keywords": keywords,
             "document_type": document_type,
             "summary_status": "complete",
+            "summary_error": None,
             "summarized_at": datetime.now(timezone.utc),
             "summary_model": model,
         }},
@@ -294,14 +387,147 @@ def update_summary(
     return result.modified_count > 0
 
 
-def mark_summary_failed(doc_id: str) -> bool:
-    """Mark a document's summarization as failed."""
+def retry_text_extraction() -> Dict[str, int]:
+    """Re-attempt text extraction for documents where it previously failed.
+
+    First tries the standard extractor (handles newly added formats like .xls).
+    For PDFs that still fail, attempts Stirling PDF (fast text extract, then OCR).
+    Returns a dict with counts: total, succeeded, stirling_fast, stirling_ocr, failed.
+    """
+    import gridfs
+    from app.services.text_extraction_service import extract_text
+
+    col = _get_collection()
+    db = _get_db()
+    fs = gridfs.GridFS(db)
+
+    docs = list(col.find(
+        {
+            "summary_status": {"$in": ["pending", "failed"]},
+            "text_extraction_status": {"$in": ["failed", "unsupported"]},
+        },
+        {"_id": 1, "filename": 1, "extension": 1, "gridfs_id": 1},
+    ))
+
+    stats = {"total": len(docs), "succeeded": 0, "stirling_fast": 0, "stirling_ocr": 0, "failed": 0}
+
+    if not docs:
+        return stats
+
+    # Check if Stirling PDF is available for OCR fallback
+    stirling_available = False
+    try:
+        from app.services import stirling_pdf_service
+        stirling_available = stirling_pdf_service.is_configured()
+        if stirling_available:
+            logger.info("Stirling PDF available for OCR fallback")
+    except Exception:
+        pass
+
+    pdf_count = sum(1 for d in docs if d["extension"].lower() == ".pdf")
+    non_pdf_count = stats["total"] - pdf_count
+    logger.info(
+        f"Retrying text extraction for {stats['total']} documents "
+        f"({pdf_count} PDFs, {non_pdf_count} other)"
+        f"{' — Stirling PDF available for OCR' if stirling_available else ''}"
+    )
+
+    for i, doc in enumerate(docs):
+        filename = doc["filename"]
+        ext = doc["extension"].lower()
+
+        try:
+            grid_out = fs.get(doc["gridfs_id"])
+            file_data = grid_out.read()
+        except Exception:
+            stats["failed"] += 1
+            continue
+
+        # Try standard extraction first
+        try:
+            text, status = extract_text(file_data, ext)
+        except Exception as e:
+            logger.warning(f"Standard extraction error for {filename}: {e}")
+            text, status = "", "failed"
+
+        # If standard extraction failed for PDFs, try Stirling PDF
+        if status != "complete" and ext == ".pdf" and stirling_available:
+            # Fast path first: direct text extraction (~1 second)
+            fast_text = stirling_pdf_service.extract_text_direct(file_data)
+            if fast_text:
+                text = fast_text
+                status = "complete"
+                stats["stirling_fast"] += 1
+                logger.info(f"[{i+1}/{stats['total']}] Stirling fast extract: {filename}")
+            else:
+                # Slow path: OCR (1-5 minutes per file)
+                remaining_ocr = sum(
+                    1 for d in docs[i:]
+                    if d["extension"].lower() == ".pdf"
+                ) - 1
+                logger.info(
+                    f"[{i+1}/{stats['total']}] Stirling OCR for: {filename} "
+                    f"(~2-4 min, {remaining_ocr} more PDFs after this)"
+                )
+                ocr_text = stirling_pdf_service.extract_text_via_ocr(file_data)
+                if ocr_text:
+                    text = ocr_text
+                    status = "complete"
+                    stats["stirling_ocr"] += 1
+
+        if status == "complete" and text and text.strip():
+            col.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {
+                    "extracted_text": text.strip(),
+                    "text_extraction_status": "complete",
+                    "summary_status": "pending",
+                    "summary_error": None,
+                }},
+            )
+            stats["succeeded"] += 1
+            logger.info(f"[{i+1}/{stats['total']}] Re-extracted text for: {filename}")
+        else:
+            stats["failed"] += 1
+
+    logger.info(
+        f"Text re-extraction complete: {stats['succeeded']} succeeded "
+        f"({stats['stirling_fast']} fast, {stats['stirling_ocr']} OCR), "
+        f"{stats['failed']} failed out of {stats['total']}"
+    )
+    return stats
+
+
+def mark_unsummarizable_documents() -> int:
+    """Mark pending documents that can't be summarized due to failed text extraction."""
+    col = _get_collection()
+    result = col.update_many(
+        {
+            "summary_status": "pending",
+            "$or": [
+                {"text_extraction_status": {"$in": ["failed", "unsupported"]}},
+                {"extracted_text": {"$in": [None, ""]}},
+            ],
+        },
+        {"$set": {
+            "summary_status": "failed",
+            "summary_error": "Text extraction failed or unsupported file type",
+        }},
+    )
+    return result.modified_count
+
+
+def mark_summary_failed(doc_id: str, error: str = "") -> bool:
+    """Mark a document's summarization as failed with an error reason."""
     from bson import ObjectId
 
     col = _get_collection()
     result = col.update_one(
         {"_id": ObjectId(doc_id)},
-        {"$set": {"summary_status": "failed"}},
+        {"$set": {
+            "summary_status": "failed",
+            "summary_error": error,
+        }},
     )
     return result.modified_count > 0
 
@@ -311,9 +537,34 @@ def reset_failed_summaries() -> int:
     col = _get_collection()
     result = col.update_many(
         {"summary_status": "failed"},
-        {"$set": {"summary_status": "pending"}},
+        {"$set": {"summary_status": "pending", "summary_error": None}},
     )
     return result.modified_count
+
+
+def reset_scan_failed_summaries(scan_url: str) -> int:
+    """Reset failed summaries for a specific scan back to pending."""
+    col = _get_collection()
+    result = col.update_many(
+        {"scan_url": scan_url, "summary_status": "failed"},
+        {"$set": {"summary_status": "pending", "summary_error": None}},
+    )
+    return result.modified_count
+
+
+def get_scan_failed_summary_errors(scan_url: str) -> List[Dict[str, Any]]:
+    """Get failed documents with their error details for a specific scan."""
+    col = _get_collection()
+    cursor = col.find(
+        {"scan_url": scan_url, "summary_status": "failed"},
+        {"filename": 1, "summary_error": 1, "extension": 1},
+    ).sort("filename", 1)
+
+    results = []
+    for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        results.append(doc)
+    return results
 
 
 def get_summary_stats() -> Dict[str, int]:
@@ -328,6 +579,65 @@ def get_summary_stats() -> Dict[str, int]:
         if status in stats:
             stats[status] = row["count"]
     return stats
+
+
+def get_scan_summary_stats(scan_url: str) -> Dict[str, int]:
+    """Get counts of documents by summary status for a specific scan."""
+    col = _get_collection()
+    pipeline = [
+        {"$match": {"scan_url": scan_url}},
+        {"$group": {"_id": "$summary_status", "count": {"$sum": 1}}},
+    ]
+    stats = {"pending": 0, "complete": 0, "failed": 0, "skipped": 0}
+    for row in col.aggregate(pipeline):
+        status = row["_id"]
+        if status in stats:
+            stats[status] = row["count"]
+    return stats
+
+
+def reset_scan_summaries(scan_url: str) -> int:
+    """Reset all summaries for a specific scan back to pending."""
+    col = _get_collection()
+    result = col.update_many(
+        {"scan_url": scan_url, "summary_status": {"$in": ["complete", "failed"]}},
+        {"$set": {
+            "title": None,
+            "short_summary": None,
+            "summary": None,
+            "keywords": [],
+            "document_type": None,
+            "summary_status": "pending",
+            "summary_error": None,
+            "summarized_at": None,
+            "summary_model": None,
+        }},
+    )
+    return result.modified_count
+
+
+def get_documents_for_export(scan_url: str) -> List[Dict[str, Any]]:
+    """Get all documents for a scan, projecting only fields needed for CSV export."""
+    col = _get_collection()
+    projection = {
+        "filename": 1,
+        "title": 1,
+        "short_summary": 1,
+        "source_url": 1,
+        "file_type_label": 1,
+        "version_label": 1,
+        "content_hash": 1,
+        "extension": 1,
+    }
+    cursor = col.find(
+        {"scan_url": scan_url}, projection
+    ).sort("filename", 1)
+
+    results = []
+    for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        results.append(doc)
+    return results
 
 
 def delete_document(doc_id: str) -> bool:

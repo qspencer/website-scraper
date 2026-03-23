@@ -27,7 +27,7 @@ def extract_text(file_data: bytes, extension: str) -> Tuple[str, str]:
         "docx": _extract_docx,
         "doc": _extract_docx,  # python-docx can sometimes handle .doc
         "xlsx": _extract_xlsx,
-        "xls": _extract_xlsx,
+        "xls": _extract_xls,
         "txt": _extract_text_file,
         "csv": _extract_text_file,
         "md": _extract_text_file,
@@ -91,6 +91,172 @@ def _extract_xlsx(file_data: bytes) -> str:
             if cells:
                 parts.append(" | ".join(cells))
     wb.close()
+    return "\n".join(parts)
+
+
+def _extract_xls(file_data: bytes) -> str:
+    """Extract text from a legacy .xls file using xlrd."""
+    import xlrd
+
+    wb = xlrd.open_workbook(file_contents=file_data)
+    parts = []
+    for sheet in wb.sheets():
+        parts.append(f"[Sheet: {sheet.name}]")
+        for row_idx in range(sheet.nrows):
+            cells = [str(sheet.cell_value(row_idx, col)) for col in range(sheet.ncols)
+                     if sheet.cell_value(row_idx, col) not in (None, "")]
+            if cells:
+                parts.append(" | ".join(cells))
+    return "\n".join(parts)
+
+
+def extract_spreadsheet_metadata(file_data: bytes, extension: str) -> str:
+    """Extract structured metadata from a spreadsheet for AI summarization.
+
+    Returns a formatted string describing sheet names, column headers,
+    row counts, and sample data rows for each sheet.
+    """
+    ext = extension.lower().lstrip(".")
+
+    if ext in ("csv", "tsv"):
+        return _extract_csv_metadata(file_data, ext)
+
+    if ext == "xls":
+        return _extract_xls_metadata(file_data)
+
+    # xlsx and other openpyxl-supported formats
+    return _extract_xlsx_metadata(file_data)
+
+
+def _extract_xlsx_metadata(file_data: bytes) -> str:
+    """Extract metadata from an .xlsx file using openpyxl."""
+    from openpyxl import load_workbook
+
+    try:
+        wb = load_workbook(io.BytesIO(file_data), read_only=True, data_only=True)
+    except Exception as e:
+        logger.warning(f"Failed to open xlsx for metadata: {e}")
+        return ""
+
+    parts = [f"Spreadsheet with {len(wb.sheetnames)} sheet(s): {', '.join(wb.sheetnames)}"]
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        rows = []
+        for row in ws.iter_rows(values_only=True):
+            cells = [str(c) if c is not None else "" for c in row]
+            if any(c for c in cells):
+                rows.append(cells)
+
+        row_count = len(rows)
+        parts.append(f"\n--- Sheet: {sheet_name} ({row_count} rows) ---")
+
+        if row_count == 0:
+            parts.append("  (empty sheet)")
+            continue
+
+        headers = rows[0]
+        parts.append(f"  Column headers: {' | '.join(headers)}")
+
+        sample_rows = rows[1:6]
+        if sample_rows:
+            parts.append(f"  Sample data ({min(len(sample_rows), 5)} of {row_count - 1} data rows):")
+            for row in sample_rows:
+                parts.append(f"    {' | '.join(row)}")
+
+        if row_count > 6:
+            parts.append(f"  ... and {row_count - 6} more rows")
+
+    wb.close()
+    return "\n".join(parts)
+
+
+def _extract_xls_metadata(file_data: bytes) -> str:
+    """Extract metadata from a legacy .xls file using xlrd."""
+    import xlrd
+
+    try:
+        wb = xlrd.open_workbook(file_contents=file_data)
+    except Exception as e:
+        logger.warning(f"Failed to open xls for metadata: {e}")
+        return ""
+
+    sheet_names = wb.sheet_names()
+    parts = [f"Spreadsheet with {len(sheet_names)} sheet(s): {', '.join(sheet_names)}"]
+
+    for sheet in wb.sheets():
+        rows = []
+        for row_idx in range(sheet.nrows):
+            cells = [str(sheet.cell_value(row_idx, col)) if sheet.cell_value(row_idx, col) not in (None, "")
+                     else "" for col in range(sheet.ncols)]
+            if any(c for c in cells):
+                rows.append(cells)
+
+        row_count = len(rows)
+        parts.append(f"\n--- Sheet: {sheet.name} ({row_count} rows) ---")
+
+        if row_count == 0:
+            parts.append("  (empty sheet)")
+            continue
+
+        headers = rows[0]
+        parts.append(f"  Column headers: {' | '.join(headers)}")
+
+        sample_rows = rows[1:6]
+        if sample_rows:
+            parts.append(f"  Sample data ({min(len(sample_rows), 5)} of {row_count - 1} data rows):")
+            for row in sample_rows:
+                parts.append(f"    {' | '.join(row)}")
+
+        if row_count > 6:
+            parts.append(f"  ... and {row_count - 6} more rows")
+
+    return "\n".join(parts)
+
+
+def _extract_csv_metadata(file_data: bytes, ext: str) -> str:
+    """Extract metadata from a CSV/TSV file."""
+    import csv
+
+    # Decode the file
+    text = ""
+    for encoding in ("utf-8", "latin-1", "cp1252"):
+        try:
+            text = file_data.decode(encoding)
+            break
+        except (UnicodeDecodeError, ValueError):
+            continue
+    if not text:
+        return ""
+
+    delimiter = "\t" if ext == "tsv" else ","
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+
+    rows = []
+    for i, row in enumerate(reader):
+        if i >= 50:  # read enough for metadata
+            break
+        if any(c.strip() for c in row):
+            rows.append(row)
+
+    if not rows:
+        return ""
+
+    total_lines = text.count("\n")
+    parts = [f"CSV file with approximately {total_lines} rows"]
+
+    headers = rows[0]
+    parts.append(f"Column headers: {' | '.join(headers)}")
+
+    sample_rows = rows[1:6]
+    if sample_rows:
+        parts.append(f"Sample data ({min(len(sample_rows), 5)} rows):")
+        for row in sample_rows:
+            parts.append(f"  {' | '.join(row)}")
+
+    if total_lines > 6:
+        parts.append(f"... and approximately {total_lines - 6} more rows")
+
     return "\n".join(parts)
 
 

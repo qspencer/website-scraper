@@ -311,13 +311,16 @@
             </div>
 
             <!-- Summarization Note -->
-            <div id="mongoSummarizationNote" class="hidden mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+            <div id="mongoSummarizationNote" class="hidden mb-4 p-3 rounded-lg text-sm">
                 <div class="flex items-center gap-2">
-                    <svg class="w-4 h-4 text-blue-600 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <svg id="summarizationSpinner" class="w-4 h-4 text-blue-600 animate-spin" fill="none" viewBox="0 0 24 24">
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                     </svg>
-                    <span>AI summarization running in the background. You can close this dialog.</span>
+                    <svg id="summarizationCheck" class="w-4 h-4 text-green-600 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                    </svg>
+                    <span id="summarizationStatusText">AI summarization running in the background. You can close this dialog.</span>
                 </div>
             </div>
 
@@ -1718,7 +1721,8 @@
                 document.getElementById('mongoOverlayBtn').textContent = 'Close';
 
                 if (data.summarization_started) {
-                    document.getElementById('mongoSummarizationNote').classList.remove('hidden');
+                    showSummarizationRunning();
+                    pollSummarizationStatus();
                 }
             });
 
@@ -1746,6 +1750,61 @@
             mongoEventSource = null;
         }
         document.getElementById('mongodbOverlay').classList.add('hidden');
+    }
+
+    // --- Summarization status polling ---
+    let summarizationPollTimer = null;
+
+    function showSummarizationRunning() {
+        const note = document.getElementById('mongoSummarizationNote');
+        note.classList.remove('hidden', 'bg-green-50', 'border-green-200', 'text-green-800');
+        note.classList.add('bg-blue-50', 'border', 'border-blue-200', 'text-blue-800');
+        document.getElementById('summarizationSpinner').classList.remove('hidden');
+        document.getElementById('summarizationCheck').classList.add('hidden');
+        document.getElementById('summarizationStatusText').textContent =
+            'AI summarization running in the background. You can close this dialog.';
+    }
+
+    function showSummarizationComplete(stats) {
+        const note = document.getElementById('mongoSummarizationNote');
+        note.classList.remove('bg-blue-50', 'border-blue-200', 'text-blue-800');
+        note.classList.add('bg-green-50', 'border', 'border-green-200', 'text-green-800');
+        document.getElementById('summarizationSpinner').classList.add('hidden');
+        document.getElementById('summarizationCheck').classList.remove('hidden');
+
+        const parts = [];
+        if (stats.complete > 0) parts.push(`${stats.complete} summarized`);
+        if (stats.failed > 0) parts.push(`${stats.failed} failed`);
+        document.getElementById('summarizationStatusText').textContent =
+            `AI summarization complete: ${parts.join(', ')}.`;
+    }
+
+    function pollSummarizationStatus() {
+        if (summarizationPollTimer) clearInterval(summarizationPollTimer);
+
+        summarizationPollTimer = setInterval(async () => {
+            try {
+                const resp = await fetch('/api/download/mongodb/summarization/status');
+                const data = await resp.json();
+
+                if (!data.is_running) {
+                    clearInterval(summarizationPollTimer);
+                    summarizationPollTimer = null;
+                    showSummarizationComplete(data.stats);
+                } else {
+                    // Update with progress
+                    const s = data.stats;
+                    const done = s.complete + s.failed;
+                    const total = done + s.pending;
+                    if (total > 0) {
+                        document.getElementById('summarizationStatusText').textContent =
+                            `AI summarization in progress... (${done}/${total})`;
+                    }
+                }
+            } catch (e) {
+                // Silently ignore polling errors
+            }
+        }, 3000);
     }
 </script>
 {% endblock %}

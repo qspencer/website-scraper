@@ -132,6 +132,19 @@ async def history_page(request: Request):
     )
 
 
+@app.get("/documents", response_class=HTMLResponse)
+async def documents_page(request: Request):
+    """Document search page."""
+    logger.debug("Serving documents page")
+    return templates.TemplateResponse(
+        request,
+        "documents.html",
+        {
+            "title": f"Documents - {settings.APP_NAME}",
+        },
+    )
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""

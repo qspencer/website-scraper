@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     REQUEST_TIMEOUT: int = 30
     MAX_CONCURRENT_REQUESTS: int = 10
     DEFAULT_CRAWL_DEPTH: int = 2
-    MAX_CRAWL_DEPTH: int = 5
+    MAX_CRAWL_DEPTH: int = 10
     MAX_PAGES_TO_SCAN: int = 500  # Pages per batch (can continue scanning)
     USER_AGENT: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     AI_API_URL: str = ""
     AI_API_KEY: str = ""
     AI_MODEL: str = ""
+
+    # Stirling PDF (OCR for scanned documents)
+    STIRLING_PDF_URL: str = "http://localhost:8080"
 
 
 settings = Settings()

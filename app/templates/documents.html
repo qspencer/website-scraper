@@ -1,0 +1,790 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <h1 class="text-2xl font-bold text-gray-800 mb-4">Search Documents</h1>
+
+        <!-- Scan selector -->
+        <div class="mb-4">
+            <label for="scanSelect" class="block text-sm font-medium text-gray-700 mb-1">Scan</label>
+            <select id="scanSelect" onchange="onScanSelected()"
+                class="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 outline-none transition">
+                <option value="">Loading scans...</option>
+            </select>
+        </div>
+
+        <!-- Summarization bar (hidden until scan selected) -->
+        <div id="summarizationBar" class="hidden mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2 text-sm text-gray-600">
+                    <span id="summaryStatsText"></span>
+                    <div id="summarySpinner" class="spinner hidden" style="width:16px;height:16px;"></div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button
+                        id="retryBtn"
+                        onclick="retryFailed()"
+                        class="px-3 py-1.5 text-sm font-medium rounded-lg transition hidden border border-red-300 text-red-700 hover:bg-red-50"
+                    >Retry Failed</button>
+                    <button
+                        id="summarizeBtn"
+                        onclick="startSummarization()"
+                        class="px-4 py-1.5 text-sm font-medium rounded-lg transition hidden"
+                    ></button>
+                </div>
+            </div>
+            <!-- Failure details panel (hidden until user clicks) -->
+            <div id="failureDetails" class="hidden mt-3 border-t border-gray-200 pt-3">
+                <div class="flex items-center justify-between mb-2">
+                    <h4 class="text-sm font-semibold text-red-700">Failed Summarizations</h4>
+                    <button onclick="hideFailureDetails()" class="text-gray-400 hover:text-gray-600 text-sm">Close</button>
+                </div>
+                <div id="failureList" class="max-h-48 overflow-y-auto space-y-2 text-sm"></div>
+            </div>
+        </div>
+
+        <!-- Search controls (hidden until scan selected) -->
+        <div id="searchControls" class="hidden">
+            <div class="flex flex-col md:flex-row gap-3">
+                <div class="flex-1">
+                    <input
+                        type="text"
+                        id="searchQuery"
+                        placeholder="Search by filename, content, summary, or keywords..."
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                        onkeydown="if(event.key==='Enter') performSearch()"
+                    >
+                </div>
+                <div>
+                    <select id="extensionFilter" class="px-3 py-2 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 outline-none transition">
+                        <option value="">All types</option>
+                    </select>
+                </div>
+                <button
+                    onclick="performSearch()"
+                    class="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition flex items-center gap-2"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    Search
+                </button>
+                <button
+                    onclick="exportCSV()"
+                    class="px-4 py-2 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-100 transition flex items-center gap-2"
+                    title="Export to CSV"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    CSV
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats bar -->
+    <div id="statsBar" class="mb-4 text-sm text-gray-500 hidden">
+        <span id="resultCount"></span>
+    </div>
+
+    <!-- Loading spinner -->
+    <div id="loadingSpinner" class="text-center py-12 hidden">
+        <div class="spinner mx-auto mb-3" style="width:32px;height:32px;"></div>
+        <p class="text-gray-500">Searching...</p>
+    </div>
+
+    <!-- No scans message -->
+    <div id="noScans" class="text-center py-12 hidden">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8" />
+        </svg>
+        <p class="text-gray-500 text-lg">No documents stored yet</p>
+        <p class="text-gray-400 text-sm mt-1">Scan a website and download documents to MongoDB first</p>
+    </div>
+
+    <!-- No results -->
+    <div id="noResults" class="text-center py-12 hidden">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <p class="text-gray-500 text-lg">No documents found</p>
+        <p class="text-gray-400 text-sm mt-1">Try a different search term or filter</p>
+    </div>
+
+    <!-- Connection error -->
+    <div id="connectionError" class="text-center py-12 hidden">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-red-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01M12 3a9 9 0 100 18 9 9 0 000-18z" />
+        </svg>
+        <p class="text-red-500 text-lg">Cannot connect to MongoDB</p>
+        <p id="connectionErrorMsg" class="text-gray-400 text-sm mt-1"></p>
+    </div>
+
+    <!-- Results list -->
+    <div id="resultsList" class="space-y-4"></div>
+
+    <!-- Document detail modal -->
+    <div id="detailModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
+            <div class="flex items-center justify-between p-4 border-b">
+                <h2 id="detailTitle" class="text-lg font-semibold text-gray-800 truncate"></h2>
+                <button onclick="closeDetail()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+            </div>
+            <div id="detailContent" class="p-4 overflow-y-auto flex-1"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let selectedScanUrl = '';
+    let summaryPollTimer = null;
+
+    document.addEventListener('DOMContentLoaded', loadScans);
+
+    async function loadScans() {
+        try {
+            const resp = await fetch('/api/download/mongodb/scans');
+            const data = await resp.json();
+            const select = document.getElementById('scanSelect');
+
+            if (data.scans.length === 0) {
+                select.innerHTML = '<option value="">No scans stored</option>';
+                document.getElementById('noScans').classList.remove('hidden');
+                return;
+            }
+
+            select.innerHTML = '<option value="">Select a scan...</option>';
+            data.scans.forEach(scan => {
+                const option = document.createElement('option');
+                option.value = scan.scan_url;
+                const date = scan.latest_download
+                    ? new Date(scan.latest_download).toLocaleDateString()
+                    : '';
+                option.textContent = `${scan.scan_url} (${scan.document_count} docs${date ? ', ' + date : ''})`;
+                select.appendChild(option);
+            });
+        } catch (e) {
+            console.error('Failed to load scans:', e);
+            document.getElementById('connectionError').classList.remove('hidden');
+            document.getElementById('connectionErrorMsg').textContent = e.message;
+        }
+    }
+
+    async function onScanSelected() {
+        const select = document.getElementById('scanSelect');
+        selectedScanUrl = select.value;
+
+        // Stop any existing polling
+        if (summaryPollTimer) {
+            clearInterval(summaryPollTimer);
+            summaryPollTimer = null;
+        }
+
+        // Reset state
+        document.getElementById('resultsList').innerHTML = '';
+        document.getElementById('statsBar').classList.add('hidden');
+        document.getElementById('noResults').classList.add('hidden');
+        document.getElementById('searchQuery').value = '';
+        document.getElementById('summarizationBar').classList.add('hidden');
+
+        if (!selectedScanUrl) {
+            document.getElementById('searchControls').classList.add('hidden');
+            return;
+        }
+
+        document.getElementById('searchControls').classList.remove('hidden');
+        await loadExtensions(selectedScanUrl);
+        await loadSummaryStats();
+        performSearch();
+    }
+
+    async function loadSummaryStats() {
+        if (!selectedScanUrl) return;
+
+        try {
+            const resp = await fetch(`/api/download/mongodb/scan/summary-stats?scan_url=${encodeURIComponent(selectedScanUrl)}`);
+            const stats = await resp.json();
+            updateSummarizationBar(stats);
+        } catch (e) {
+            console.error('Failed to load summary stats:', e);
+        }
+    }
+
+    function updateSummarizationBar(stats) {
+        const bar = document.getElementById('summarizationBar');
+        const statsText = document.getElementById('summaryStatsText');
+        const btn = document.getElementById('summarizeBtn');
+        const retryBtn = document.getElementById('retryBtn');
+        const spinner = document.getElementById('summarySpinner');
+
+        const total = stats.pending + stats.complete + stats.failed + stats.skipped;
+        if (total === 0) {
+            bar.classList.add('hidden');
+            return;
+        }
+
+        bar.classList.remove('hidden');
+
+        const parts = [];
+        if (stats.complete > 0) parts.push(`${stats.complete} summarized`);
+        if (stats.pending > 0) parts.push(`${stats.pending} pending`);
+        if (stats.failed > 0) parts.push(`<a href="#" onclick="showFailureDetails(); return false;" class="text-red-600 hover:underline">${stats.failed} failed</a>`);
+        if (stats.skipped > 0) parts.push(`${stats.skipped} skipped`);
+        statsText.innerHTML = parts.join(', ');
+
+        // Show retry button when there are failures and nothing is pending
+        if (stats.failed > 0 && stats.pending === 0) {
+            retryBtn.classList.remove('hidden');
+            retryBtn.disabled = false;
+        } else {
+            retryBtn.classList.add('hidden');
+        }
+
+        // Determine main button state
+        if (stats.complete === 0 && stats.failed === 0) {
+            // No summaries exist yet
+            btn.textContent = 'Create Summaries';
+            btn.className = 'px-4 py-1.5 text-sm font-medium rounded-lg transition bg-blue-600 text-white hover:bg-blue-700';
+            btn.onclick = () => startSummarization(false);
+            btn.disabled = false;
+            btn.classList.remove('hidden');
+            spinner.classList.add('hidden');
+        } else if (stats.pending === 0 && stats.failed === 0) {
+            // All done — offer recreate
+            btn.textContent = 'Recreate Summaries';
+            btn.className = 'px-4 py-1.5 text-sm font-medium rounded-lg transition border border-gray-300 text-gray-700 hover:bg-gray-100';
+            btn.onclick = () => startSummarization(true);
+            btn.disabled = false;
+            btn.classList.remove('hidden');
+            spinner.classList.add('hidden');
+        } else if (stats.pending > 0) {
+            // Some pending — offer to continue
+            btn.textContent = 'Create Summaries';
+            btn.className = 'px-4 py-1.5 text-sm font-medium rounded-lg transition bg-blue-600 text-white hover:bg-blue-700';
+            btn.onclick = () => startSummarization(false);
+            btn.disabled = false;
+            btn.classList.remove('hidden');
+            spinner.classList.add('hidden');
+        } else if (stats.failed > 0) {
+            // Only failures remain — main button offers recreate
+            btn.textContent = 'Recreate Summaries';
+            btn.className = 'px-4 py-1.5 text-sm font-medium rounded-lg transition border border-gray-300 text-gray-700 hover:bg-gray-100';
+            btn.onclick = () => startSummarization(true);
+            btn.disabled = false;
+            btn.classList.remove('hidden');
+            spinner.classList.add('hidden');
+        } else {
+            btn.classList.add('hidden');
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function startSummarization(recreate) {
+        const btn = document.getElementById('summarizeBtn');
+        const spinner = document.getElementById('summarySpinner');
+        const statsText = document.getElementById('summaryStatsText');
+
+        if (recreate && !confirm('This will recreate all summaries for this scan. Continue?')) return;
+
+        btn.disabled = true;
+        btn.textContent = 'Starting...';
+        spinner.classList.remove('hidden');
+
+        try {
+            const resp = await fetch('/api/download/mongodb/scan/summarize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scan_url: selectedScanUrl, recreate }),
+            });
+
+            const data = await resp.json();
+
+            if (!resp.ok) {
+                alert(data.detail || 'Failed to start summarization');
+                btn.disabled = false;
+                btn.textContent = recreate ? 'Recreate Summaries' : 'Create Summaries';
+                spinner.classList.add('hidden');
+                return;
+            }
+
+            if (data.started) {
+                btn.classList.add('hidden');
+                statsText.textContent = 'Starting summarization... (re-extracting text, then summarizing)';
+                startSummaryPolling();
+            } else {
+                statsText.textContent = data.message;
+                btn.disabled = false;
+                spinner.classList.add('hidden');
+            }
+        } catch (e) {
+            alert('Error: ' + e.message);
+            btn.disabled = false;
+            spinner.classList.add('hidden');
+        }
+    }
+
+    let pollStartTime = null;
+    let pollStartComplete = 0;
+
+    function startSummaryPolling() {
+        if (summaryPollTimer) clearInterval(summaryPollTimer);
+        pollStartTime = Date.now();
+        pollStartComplete = 0;
+
+        // Get initial baseline
+        fetch(`/api/download/mongodb/scan/summary-stats?scan_url=${encodeURIComponent(selectedScanUrl)}`)
+            .then(r => r.json())
+            .then(s => { pollStartComplete = s.complete || 0; })
+            .catch(() => {});
+
+        let pollBusy = false;
+        summaryPollTimer = setInterval(async () => {
+            if (pollBusy) return; // skip if previous poll still in-flight
+            pollBusy = true;
+            try {
+                const globalResp = await fetch('/api/download/mongodb/summarization/status');
+                const globalData = await globalResp.json();
+                const scanResp = await fetch(`/api/download/mongodb/scan/summary-stats?scan_url=${encodeURIComponent(selectedScanUrl)}`);
+                const scanStats = await scanResp.json();
+
+                const statsText = document.getElementById('summaryStatsText');
+                const spinner = document.getElementById('summarySpinner');
+
+                if (!globalData.is_running) {
+                    clearInterval(summaryPollTimer);
+                    summaryPollTimer = null;
+                    pollStartTime = null;
+                    spinner.classList.add('hidden');
+                    await loadSummaryStats();
+                    performSearch();
+                } else {
+                    const done = scanStats.complete + scanStats.failed;
+                    const total = done + scanStats.pending;
+                    const newlyDone = scanStats.complete - pollStartComplete;
+
+                    let msg = `Processing... ${done} of ${total} done`;
+
+                    // Calculate rate and ETA
+                    if (pollStartTime && newlyDone > 2) {
+                        const elapsed = (Date.now() - pollStartTime) / 1000;
+                        const rate = newlyDone / elapsed; // docs per second
+                        const remaining = scanStats.pending;
+                        if (rate > 0 && remaining > 0) {
+                            const etaSec = remaining / rate;
+                            if (etaSec < 60) {
+                                msg += ` (~${Math.round(etaSec)}s remaining)`;
+                            } else if (etaSec < 3600) {
+                                msg += ` (~${Math.round(etaSec / 60)} min remaining)`;
+                            } else {
+                                msg += ` (~${(etaSec / 3600).toFixed(1)} hr remaining)`;
+                            }
+                        }
+                    }
+
+                    if (scanStats.pending === 0 && total > 0) {
+                        msg = `Finishing up... (${scanStats.complete} summarized, ${scanStats.failed} failed)`;
+                    }
+
+                    statsText.textContent = msg;
+                }
+            } catch (e) {}
+            pollBusy = false;
+        }, 15000);
+    }
+
+    async function loadExtensions(scanUrl) {
+        try {
+            const params = new URLSearchParams();
+            if (scanUrl) params.set('scan_url', scanUrl);
+            const resp = await fetch(`/api/download/mongodb/extensions?${params}`);
+            const data = await resp.json();
+            const select = document.getElementById('extensionFilter');
+            select.innerHTML = '<option value="">All types</option>';
+            data.extensions.forEach(ext => {
+                const option = document.createElement('option');
+                option.value = ext;
+                option.textContent = ext;
+                select.appendChild(option);
+            });
+        } catch (e) {
+            console.error('Failed to load extensions:', e);
+        }
+    }
+
+    async function performSearch() {
+        if (!selectedScanUrl) return;
+
+        const query = document.getElementById('searchQuery').value.trim();
+        const extension = document.getElementById('extensionFilter').value;
+
+        document.getElementById('loadingSpinner').classList.remove('hidden');
+        document.getElementById('noResults').classList.add('hidden');
+        document.getElementById('connectionError').classList.add('hidden');
+        document.getElementById('resultsList').innerHTML = '';
+        document.getElementById('statsBar').classList.add('hidden');
+
+        try {
+            const params = new URLSearchParams();
+            if (query) params.set('q', query);
+            params.set('scan_url', selectedScanUrl);
+            if (extension) params.set('extension', extension);
+            params.set('limit', '100');
+
+            const resp = await fetch(`/api/download/mongodb/search?${params}`);
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                throw new Error(err.detail || 'Search failed');
+            }
+
+            const data = await resp.json();
+            const results = data.results;
+
+            // Sort alphabetically by title, falling back to filename
+            results.sort((a, b) => {
+                const nameA = (a.title || a.filename || '').toLowerCase();
+                const nameB = (b.title || b.filename || '').toLowerCase();
+                return nameA.localeCompare(nameB);
+            });
+
+            document.getElementById('loadingSpinner').classList.add('hidden');
+
+            if (results.length === 0) {
+                document.getElementById('noResults').classList.remove('hidden');
+                document.getElementById('statsBar').classList.remove('hidden');
+                document.getElementById('resultCount').textContent = '0 documents found';
+                return;
+            }
+
+            document.getElementById('statsBar').classList.remove('hidden');
+            document.getElementById('resultCount').textContent =
+                `${results.length} document${results.length !== 1 ? 's' : ''} found`;
+
+            renderResults(results);
+
+        } catch (e) {
+            document.getElementById('loadingSpinner').classList.add('hidden');
+            console.error('Search error:', e);
+            document.getElementById('connectionError').classList.remove('hidden');
+            document.getElementById('connectionErrorMsg').textContent = e.message;
+        }
+    }
+
+    function renderResults(results) {
+        const container = document.getElementById('resultsList');
+        container.innerHTML = '';
+
+        results.forEach(doc => {
+            const card = document.createElement('div');
+            card.className = 'bg-white rounded-lg shadow-sm border border-gray-200 p-4 hover:shadow-md transition cursor-pointer';
+            card.onclick = () => showDetail(doc._id);
+
+            const ext = doc.extension || '';
+            const extColor = getExtColor(ext);
+            const date = doc.downloaded_at ? new Date(doc.downloaded_at).toLocaleDateString() : '';
+            const size = doc.file_size_bytes ? formatFileSize(doc.file_size_bytes) : '';
+            const title = doc.title || '';
+            const shortSummary = doc.short_summary || '';
+            const summary = doc.summary || '';
+            const keywords = doc.keywords || [];
+            const fileType = doc.file_type_label || '';
+            const version = doc.version_label || '';
+            const summaryStatus = doc.summary_status || 'pending';
+
+            // Show short summary if available, fall back to full summary
+            const displaySummary = shortSummary || summary;
+            let summaryHTML = '';
+            if (displaySummary) {
+                summaryHTML = `<p class="text-sm text-gray-600 mt-2 line-clamp-2">${escapeHtml(displaySummary)}</p>`;
+            } else if (summaryStatus === 'pending') {
+                summaryHTML = `<p class="text-sm text-gray-400 mt-2 italic">Summary pending...</p>`;
+            } else if (summaryStatus === 'failed') {
+                const errMsg = doc.summary_error ? `: ${escapeHtml(doc.summary_error).substring(0, 100)}` : '';
+                summaryHTML = `<p class="text-sm text-red-400 mt-2 italic">Summary failed${errMsg}</p>`;
+            }
+
+            let keywordsHTML = '';
+            if (keywords.length > 0) {
+                keywordsHTML = `<div class="flex flex-wrap gap-1 mt-2">` +
+                    keywords.map(k => `<span class="px-2 py-0.5 bg-blue-50 text-blue-700 text-xs rounded-full">${escapeHtml(k)}</span>`).join('') +
+                    `</div>`;
+            }
+
+            let metaItems = [];
+            if (fileType) metaItems.push(escapeHtml(fileType));
+            if (size) metaItems.push(size);
+            if (version) metaItems.push(escapeHtml(version));
+            if (date) metaItems.push(date);
+
+            // Show title as heading if available, otherwise filename
+            const heading = title || doc.filename;
+
+            card.innerHTML = `
+                <div class="flex items-start gap-3">
+                    <span class="inline-block px-2 py-1 text-xs font-bold rounded ${extColor} flex-shrink-0 mt-0.5">${escapeHtml(ext.toUpperCase())}</span>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center justify-between gap-2">
+                            <h3 class="font-medium text-gray-800 truncate">${escapeHtml(heading)}</h3>
+                            <span class="text-xs text-gray-400 flex-shrink-0">${metaItems.join(' &middot; ')}</span>
+                        </div>
+                        ${title ? `<p class="text-xs text-gray-400 truncate">${escapeHtml(doc.filename)}</p>` : ''}
+                        ${summaryHTML}
+                        ${keywordsHTML}
+                    </div>
+                </div>
+            `;
+
+            container.appendChild(card);
+        });
+    }
+
+    async function showDetail(docId) {
+        const modal = document.getElementById('detailModal');
+        const title = document.getElementById('detailTitle');
+        const content = document.getElementById('detailContent');
+
+        title.textContent = 'Loading...';
+        content.innerHTML = '<div class="text-center py-8"><div class="spinner mx-auto"></div></div>';
+        modal.classList.remove('hidden');
+
+        try {
+            const resp = await fetch(`/api/download/mongodb/document/${docId}`);
+            if (!resp.ok) throw new Error('Document not found');
+
+            const doc = await resp.json();
+            title.textContent = doc.title || doc.filename;
+
+            const ext = doc.extension || '';
+            const date = doc.downloaded_at ? new Date(doc.downloaded_at).toLocaleString() : 'Unknown';
+            const size = doc.file_size_bytes ? formatFileSize(doc.file_size_bytes) : 'Unknown';
+            const keywords = doc.keywords || [];
+            const fileType = doc.file_type_label || '';
+            const docType = doc.document_type || '';
+            const version = doc.version_label || '';
+            const contentHash = doc.content_hash || '';
+            const summaryModel = doc.summary_model || '';
+            const summarizedAt = doc.summarized_at ? new Date(doc.summarized_at).toLocaleString() : '';
+
+            let html = `
+                <div class="space-y-4">
+                    <div class="grid grid-cols-2 gap-3 text-sm">
+                        <div><span class="text-gray-500">Filename:</span> <span class="font-medium">${escapeHtml(doc.filename)}</span></div>
+                        <div><span class="text-gray-500">File Type:</span> <span class="font-medium">${escapeHtml(fileType || ext)}</span></div>
+                        <div><span class="text-gray-500">Size:</span> <span class="font-medium">${size}</span></div>
+                        <div><span class="text-gray-500">Downloaded:</span> <span class="font-medium">${date}</span></div>
+                        ${version ? `<div><span class="text-gray-500">Version:</span> <span class="font-medium">${escapeHtml(version)}</span></div>` : ''}
+                        ${docType ? `<div><span class="text-gray-500">Content Type:</span> <span class="font-medium capitalize">${escapeHtml(docType)}</span></div>` : ''}
+                        <div class="col-span-2"><span class="text-gray-500">Source:</span> <a href="${escapeHtml(doc.source_url)}" target="_blank" class="text-blue-600 hover:underline break-all text-xs">${escapeHtml(doc.source_url)}</a></div>
+                        ${contentHash ? `<div class="col-span-2"><span class="text-gray-500">Content Hash:</span> <span class="font-mono text-xs text-gray-500">${escapeHtml(contentHash.substring(0, 16))}...</span></div>` : ''}
+                    </div>
+            `;
+
+            if (doc.summary_status === 'failed' && doc.summary_error) {
+                html += `
+                    <div>
+                        <h4 class="text-sm font-semibold text-red-700 mb-1">Summarization Error</h4>
+                        <p class="text-sm text-red-600 bg-red-50 rounded p-3">${escapeHtml(doc.summary_error)}</p>
+                    </div>
+                `;
+            }
+
+            if (doc.short_summary) {
+                html += `
+                    <div>
+                        <h4 class="text-sm font-semibold text-gray-700 mb-1">Short Summary</h4>
+                        <p class="text-sm text-gray-600 bg-gray-50 rounded p-3">${escapeHtml(doc.short_summary)}</p>
+                    </div>
+                `;
+            }
+
+            if (doc.summary) {
+                html += `
+                    <div>
+                        <h4 class="text-sm font-semibold text-gray-700 mb-1">Detailed Summary</h4>
+                        <p class="text-sm text-gray-600 bg-gray-50 rounded p-3">${escapeHtml(doc.summary)}</p>
+                    </div>
+                `;
+            }
+
+            if (keywords.length > 0) {
+                html += `
+                    <div>
+                        <h4 class="text-sm font-semibold text-gray-700 mb-1">Keywords</h4>
+                        <div class="flex flex-wrap gap-1">
+                            ${keywords.map(k => `<span class="px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded-full">${escapeHtml(k)}</span>`).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (doc.extracted_text) {
+                const preview = doc.extracted_text.substring(0, 2000);
+                html += `
+                    <div>
+                        <h4 class="text-sm font-semibold text-gray-700 mb-1">Extracted Text</h4>
+                        <pre class="text-xs text-gray-600 bg-gray-50 rounded p-3 max-h-60 overflow-y-auto whitespace-pre-wrap">${escapeHtml(preview)}${doc.extracted_text.length > 2000 ? '\n\n[Truncated...]' : ''}</pre>
+                    </div>
+                `;
+            }
+
+            if (summaryModel || summarizedAt) {
+                html += `<div class="text-xs text-gray-400 border-t pt-2">`;
+                if (summaryModel) html += `Model: ${escapeHtml(summaryModel)}`;
+                if (summaryModel && summarizedAt) html += ` &middot; `;
+                if (summarizedAt) html += `Summarized: ${summarizedAt}`;
+                html += `</div>`;
+            }
+
+            html += `
+                    <div class="flex gap-2 border-t pt-3">
+                        <button onclick="deleteDocument('${docId}')" class="px-3 py-1.5 text-sm text-red-600 border border-red-300 rounded hover:bg-red-50 transition">Delete</button>
+                    </div>
+                </div>
+            `;
+
+            content.innerHTML = html;
+
+        } catch (e) {
+            content.innerHTML = `<p class="text-red-500 text-center py-8">${escapeHtml(e.message)}</p>`;
+        }
+    }
+
+    function closeDetail() {
+        document.getElementById('detailModal').classList.add('hidden');
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeDetail();
+    });
+    document.getElementById('detailModal').addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeDetail();
+    });
+
+    async function deleteDocument(docId) {
+        if (!confirm('Are you sure you want to delete this document?')) return;
+
+        try {
+            const resp = await fetch(`/api/download/mongodb/document/${docId}`, { method: 'DELETE' });
+            if (!resp.ok) throw new Error('Failed to delete');
+
+            closeDetail();
+            performSearch();
+        } catch (e) {
+            alert('Failed to delete document: ' + e.message);
+        }
+    }
+
+    async function retryFailed() {
+        const retryBtn = document.getElementById('retryBtn');
+        const spinner = document.getElementById('summarySpinner');
+        const statsText = document.getElementById('summaryStatsText');
+
+        retryBtn.disabled = true;
+        retryBtn.textContent = 'Retrying...';
+        spinner.classList.remove('hidden');
+
+        try {
+            const resp = await fetch('/api/download/mongodb/scan/retry-failed', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scan_url: selectedScanUrl }),
+            });
+
+            const data = await resp.json();
+
+            if (!resp.ok) {
+                alert(data.detail || 'Failed to retry');
+                retryBtn.disabled = false;
+                retryBtn.textContent = 'Retry Failed';
+                spinner.classList.add('hidden');
+                return;
+            }
+
+            if (data.started || data.reset_count > 0) {
+                retryBtn.classList.add('hidden');
+                hideFailureDetails();
+                statsText.innerHTML = `Retrying ${data.reset_count} failed documents... <span class="text-gray-400 text-xs">(OCR for scanned PDFs may take 2-4 min each)</span>`;
+                startSummaryPolling();
+            } else {
+                statsText.textContent = data.message;
+                retryBtn.disabled = false;
+                retryBtn.textContent = 'Retry Failed';
+                spinner.classList.add('hidden');
+            }
+        } catch (e) {
+            alert('Error: ' + e.message);
+            retryBtn.disabled = false;
+            retryBtn.textContent = 'Retry Failed';
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function showFailureDetails() {
+        const panel = document.getElementById('failureDetails');
+        const list = document.getElementById('failureList');
+
+        list.innerHTML = '<div class="text-gray-400 italic">Loading...</div>';
+        panel.classList.remove('hidden');
+
+        try {
+            const resp = await fetch(`/api/download/mongodb/scan/failed-details?scan_url=${encodeURIComponent(selectedScanUrl)}`);
+            const data = await resp.json();
+
+            if (data.count === 0) {
+                list.innerHTML = '<div class="text-gray-500">No failures found.</div>';
+                return;
+            }
+
+            list.innerHTML = data.failures.map(f => `
+                <div class="bg-red-50 rounded p-2 border border-red-100">
+                    <div class="font-medium text-red-800 text-xs">${escapeHtml(f.filename)}</div>
+                    <div class="text-red-600 text-xs mt-0.5">${escapeHtml(f.summary_error || 'Unknown error')}</div>
+                </div>
+            `).join('');
+        } catch (e) {
+            list.innerHTML = `<div class="text-red-500">Failed to load details: ${escapeHtml(e.message)}</div>`;
+        }
+    }
+
+    function hideFailureDetails() {
+        document.getElementById('failureDetails').classList.add('hidden');
+    }
+
+    function exportCSV() {
+        if (!selectedScanUrl) return;
+        window.location.href = '/api/download/mongodb/export/csv?scan_url=' + encodeURIComponent(selectedScanUrl);
+    }
+
+    function getExtColor(ext) {
+        const colors = {
+            '.pdf': 'bg-red-100 text-red-800',
+            '.doc': 'bg-blue-100 text-blue-800',
+            '.docx': 'bg-blue-100 text-blue-800',
+            '.xls': 'bg-green-100 text-green-800',
+            '.xlsx': 'bg-green-100 text-green-800',
+            '.ppt': 'bg-orange-100 text-orange-800',
+            '.pptx': 'bg-orange-100 text-orange-800',
+            '.txt': 'bg-gray-100 text-gray-800',
+            '.csv': 'bg-emerald-100 text-emerald-800',
+        };
+        return colors[ext.toLowerCase()] || 'bg-purple-100 text-purple-800';
+    }
+
+    function formatFileSize(bytes) {
+        if (!bytes || bytes === 0) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+    }
+
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+</script>
+{% endblock %}
