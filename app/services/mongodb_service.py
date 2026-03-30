@@ -1,7 +1,7 @@
 """Service for storing and retrieving documents in MongoDB."""
 
 import hashlib
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timezone
 
 from app.core.logging_config import get_logger
@@ -135,14 +135,16 @@ def store_document(
     content_type: Optional[str] = None,
     extracted_text: Optional[str] = None,
     text_extraction_status: str = "pending",
-) -> str:
+    text_extraction_method: Optional[str] = None,
+) -> Tuple[str, str]:
     """
     Store a document in MongoDB using GridFS.
 
     If a document with the same source_url and scan_url already exists,
     it is replaced (file data and metadata are updated).
 
-    Returns the string ID of the document record.
+    Returns a tuple of (doc_id, action) where action is one of:
+    "new", "updated", or "unchanged".
     """
     import gridfs
 
@@ -158,12 +160,16 @@ def store_document(
     existing = col.find_one({"source_url": source_url, "scan_url": scan_url})
 
     if existing:
-        # Determine version: increment if content changed
         old_hash = existing.get("content_hash")
-        if old_hash and old_hash == content_hash:
-            version = existing.get("version", 1)
-        else:
-            version = existing.get("version", 0) + 1
+        content_changed = old_hash != content_hash
+
+        # Content unchanged — skip re-upload entirely
+        if not content_changed:
+            logger.info(f"Document unchanged, skipping: {filename} (id={existing['_id']})")
+            return str(existing["_id"]), "unchanged"
+
+        # Content changed — replace file and bump version
+        version = existing.get("version", 0) + 1
 
         # Delete the old GridFS file
         try:
@@ -190,28 +196,24 @@ def store_document(
             "downloaded_at": datetime.now(timezone.utc),
             "extracted_text": extracted_text,
             "text_extraction_status": text_extraction_status,
+            "text_extraction_method": text_extraction_method,
             "content_hash": content_hash,
             "version": version,
             "version_label": f"v{version}",
+            "title": None,
+            "short_summary": None,
+            "summary": None,
+            "keywords": [],
+            "document_type": None,
+            "summary_status": "pending",
+            "summarized_at": None,
+            "summary_model": None,
         }
-
-        # Only reset summaries if content actually changed
-        if old_hash != content_hash:
-            update_fields.update({
-                "title": None,
-                "short_summary": None,
-                "summary": None,
-                "keywords": [],
-                "document_type": None,
-                "summary_status": "pending",
-                "summarized_at": None,
-                "summary_model": None,
-            })
 
         col.update_one({"_id": existing["_id"]}, {"$set": update_fields})
 
         logger.info(f"Updated existing document: {filename} (id={existing['_id']}, v{version})")
-        return str(existing["_id"])
+        return str(existing["_id"]), "updated"
 
     # Store new file in GridFS
     gridfs_id = fs.put(
@@ -234,6 +236,7 @@ def store_document(
         "downloaded_at": datetime.now(timezone.utc),
         "extracted_text": extracted_text,
         "text_extraction_status": text_extraction_status,
+        "text_extraction_method": text_extraction_method,
         "content_hash": content_hash,
         "version": 1,
         "version_label": "v1",
@@ -251,7 +254,7 @@ def store_document(
     _ensure_indexes()
 
     logger.info(f"Stored document: {filename} (id={result.inserted_id})")
-    return str(result.inserted_id)
+    return str(result.inserted_id), "new"
 
 
 def get_document(doc_id: str) -> Optional[Dict[str, Any]]:
@@ -444,8 +447,11 @@ def retry_text_extraction() -> Dict[str, int]:
             continue
 
         # Try standard extraction first
+        method = None
         try:
             text, status = extract_text(file_data, ext)
+            if status == "complete":
+                method = "pypdf2" if ext == ".pdf" else "standard"
         except Exception as e:
             logger.warning(f"Standard extraction error for {filename}: {e}")
             text, status = "", "failed"
@@ -457,6 +463,7 @@ def retry_text_extraction() -> Dict[str, int]:
             if fast_text:
                 text = fast_text
                 status = "complete"
+                method = "stirling_fast"
                 stats["stirling_fast"] += 1
                 logger.info(f"[{i+1}/{stats['total']}] Stirling fast extract: {filename}")
             else:
@@ -473,6 +480,7 @@ def retry_text_extraction() -> Dict[str, int]:
                 if ocr_text:
                     text = ocr_text
                     status = "complete"
+                    method = "stirling_ocr"
                     stats["stirling_ocr"] += 1
 
         if status == "complete" and text and text.strip():
@@ -481,6 +489,7 @@ def retry_text_extraction() -> Dict[str, int]:
                 {"$set": {
                     "extracted_text": text.strip(),
                     "text_extraction_status": "complete",
+                    "text_extraction_method": method,
                     "summary_status": "pending",
                     "summary_error": None,
                 }},
@@ -593,6 +602,61 @@ def get_scan_summary_stats(scan_url: str) -> Dict[str, int]:
         status = row["_id"]
         if status in stats:
             stats[status] = row["count"]
+    return stats
+
+
+def get_extraction_stats() -> Dict[str, int]:
+    """Get counts of PDF documents by text extraction method.
+
+    Returns counts for each method (pypdf2, stirling_fast, stirling_ocr)
+    plus failed/pending PDFs and total PDFs.
+    """
+    col = _get_collection()
+    pipeline = [
+        {"$match": {"extension": {"$regex": r"\.pdf$", "$options": "i"}}},
+        {"$group": {"_id": "$text_extraction_method", "count": {"$sum": 1}}},
+    ]
+    stats = {
+        "total_pdfs": 0,
+        "pypdf2": 0,
+        "stirling_fast": 0,
+        "stirling_ocr": 0,
+        "failed": 0,
+    }
+    for row in col.aggregate(pipeline):
+        method = row["_id"]
+        count = row["count"]
+        stats["total_pdfs"] += count
+        if method in stats:
+            stats[method] = count
+        else:
+            # None or unrecognized method — count as failed/pending
+            stats["failed"] += count
+    return stats
+
+
+def get_scan_extraction_stats(scan_url: str) -> Dict[str, int]:
+    """Get counts of PDF documents by text extraction method for a specific scan."""
+    col = _get_collection()
+    pipeline = [
+        {"$match": {"scan_url": scan_url, "extension": {"$regex": r"\.pdf$", "$options": "i"}}},
+        {"$group": {"_id": "$text_extraction_method", "count": {"$sum": 1}}},
+    ]
+    stats = {
+        "total_pdfs": 0,
+        "pypdf2": 0,
+        "stirling_fast": 0,
+        "stirling_ocr": 0,
+        "failed": 0,
+    }
+    for row in col.aggregate(pipeline):
+        method = row["_id"]
+        count = row["count"]
+        stats["total_pdfs"] += count
+        if method in stats:
+            stats[method] = count
+        else:
+            stats["failed"] += count
     return stats
 
 

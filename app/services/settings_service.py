@@ -22,6 +22,7 @@ class RuntimeSettings:
         "default_crawl_depth": default_settings.DEFAULT_CRAWL_DEPTH,
         "max_crawl_depth": default_settings.MAX_CRAWL_DEPTH,
         "max_concurrent_requests": default_settings.MAX_CONCURRENT_REQUESTS,
+        "results_per_page": default_settings.RESULTS_PER_PAGE,
         "scan_history_limit": default_settings.SCAN_HISTORY_LIMIT,
         "mongodb_uri": default_settings.MONGODB_URI,
         "mongodb_database": default_settings.MONGODB_DATABASE,
@@ -130,6 +131,19 @@ class RuntimeSettings:
         self._settings["max_concurrent_requests"] = value
         self._save_setting("max_concurrent_requests", value)
         logger.info(f"max_concurrent_requests set to {value}")
+
+    @property
+    def results_per_page(self) -> int:
+        return self._settings["results_per_page"]
+
+    @results_per_page.setter
+    def results_per_page(self, value: int):
+        allowed = [25, 50, 100, 0]  # 0 means "all"
+        if value not in allowed:
+            value = 50
+        self._settings["results_per_page"] = value
+        self._save_setting("results_per_page", value)
+        logger.info(f"results_per_page set to {value}")
 
     @property
     def scan_history_limit(self) -> int:

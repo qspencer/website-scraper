@@ -305,9 +305,16 @@
             <p id="mongoCurrentFile" class="text-sm text-gray-600 mb-2 truncate">Preparing...</p>
 
             <!-- Stats -->
-            <div class="flex justify-between text-sm text-gray-500 mb-4">
+            <div class="flex justify-between text-sm text-gray-500 mb-2">
                 <span>Progress: <span id="mongoProgress" class="font-medium">0/0</span></span>
                 <span class="text-red-500">Failed: <span id="mongoFailed" class="font-medium">0</span></span>
+            </div>
+            <div id="mongoActionStats" class="text-xs text-gray-400 mb-4">
+                <span class="text-green-600"><span id="mongoNew">0</span> new</span>
+                <span class="mx-1">&middot;</span>
+                <span class="text-blue-600"><span id="mongoUpdated">0</span> updated</span>
+                <span class="mx-1">&middot;</span>
+                <span><span id="mongoUnchanged">0</span> unchanged</span>
             </div>
 
             <!-- Summarization Note -->
@@ -331,6 +338,24 @@
                 class="w-full py-2 px-4 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition"
             >
                 Cancel
+            </button>
+        </div>
+    </div>
+
+    <!-- Summarization Toast Notification -->
+    <div id="summarizationToast" class="fixed bottom-6 right-6 max-w-sm bg-white rounded-lg shadow-lg border border-gray-200 p-4 hidden z-50 transition-opacity duration-300">
+        <div class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            <div class="flex-1">
+                <p class="text-sm font-medium text-gray-800">AI Summarization Complete</p>
+                <p id="toastMessage" class="text-sm text-gray-500 mt-1"></p>
+            </div>
+            <button onclick="dismissToast()" class="text-gray-400 hover:text-gray-600 flex-shrink-0">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
             </button>
         </div>
     </div>
@@ -468,6 +493,8 @@
     let selectedDocuments = new Set();
     let downloadEventSource = null;
     let mongoEventSource = null;
+    let retryEventSource = null;
+    let continueEventSource = null;
     let downloadDestination = 'filesystem';
     let mongodbConnected = false;
     let hasMorePages = false;
@@ -476,7 +503,8 @@
 
     // Pagination settings
     const GRID_THRESHOLD = 50;
-    const ITEMS_PER_PAGE = 50;
+    const configuredPerPage = {{ results_per_page }};
+    let itemsPerPage = configuredPerPage > 0 ? configuredPerPage : 10000;
     let currentPage = 1;
     let useListView = false;
 
@@ -669,15 +697,17 @@
         spinner.classList.remove('hidden');
         resultEl.classList.add('hidden');
 
-        const eventSource = new EventSource(`/api/scrape/retry/${sessionId}`);
+        if (retryEventSource) { retryEventSource.close(); }
+        retryEventSource = new EventSource(`/api/scrape/retry/${sessionId}`);
 
-        eventSource.addEventListener('progress', (e) => {
+        retryEventSource.addEventListener('progress', (e) => {
             const data = JSON.parse(e.data);
             btnText.textContent = `Retrying... (${data.completed}/${data.total})`;
         });
 
-        eventSource.addEventListener('complete', (e) => {
-            eventSource.close();
+        retryEventSource.addEventListener('complete', (e) => {
+            retryEventSource.close();
+            retryEventSource = null;
             const data = JSON.parse(e.data);
 
             spinner.classList.add('hidden');
@@ -719,8 +749,9 @@
             reloadResults();
         });
 
-        eventSource.addEventListener('error', (e) => {
-            eventSource.close();
+        retryEventSource.addEventListener('error', (e) => {
+            retryEventSource.close();
+            retryEventSource = null;
             spinner.classList.add('hidden');
             retryBtn.disabled = false;
             btnText.textContent = 'Retry failed items';
@@ -729,8 +760,9 @@
             resultEl.classList.remove('hidden');
         });
 
-        eventSource.onerror = () => {
-            eventSource.close();
+        retryEventSource.onerror = () => {
+            retryEventSource.close();
+            retryEventSource = null;
             spinner.classList.add('hidden');
             retryBtn.disabled = false;
             btnText.textContent = 'Retry failed items';
@@ -829,9 +861,10 @@
             showContinueProgress();
 
             // Connect to SSE for progress
-            const eventSource = new EventSource(`/api/scrape/progress/${sessionId}`);
+            if (continueEventSource) { continueEventSource.close(); }
+            continueEventSource = new EventSource(`/api/scrape/progress/${sessionId}`);
 
-            eventSource.addEventListener('progress', (e) => {
+            continueEventSource.addEventListener('progress', (e) => {
                 const data = JSON.parse(e.data);
                 document.getElementById('continueProgressStatus').textContent = data.message || 'Scanning...';
                 document.getElementById('continuePagesScanned').textContent = data.pages_scanned;
@@ -858,8 +891,9 @@
                 }
             });
 
-            eventSource.addEventListener('complete', (e) => {
-                eventSource.close();
+            continueEventSource.addEventListener('complete', (e) => {
+                continueEventSource.close();
+                continueEventSource = null;
                 const data = JSON.parse(e.data);
 
                 // Update local state
@@ -905,18 +939,20 @@
             let sseRetryCount = 0;
             const MAX_SSE_RETRIES = 3;
 
-            eventSource.addEventListener('error', (e) => {
+            continueEventSource.addEventListener('error', (e) => {
                 // Server-sent error event (different from connection error)
-                eventSource.close();
+                continueEventSource.close();
+                continueEventSource = null;
                 document.getElementById('continueOverlay').classList.add('hidden');
                 resetContinueBtn();
                 stopAutoscan();
                 alert('An error occurred while scanning.');
             });
 
-            eventSource.onerror = () => {
-                if (eventSource.readyState === EventSource.CLOSED) {
-                    eventSource.close();
+            continueEventSource.onerror = () => {
+                if (continueEventSource.readyState === EventSource.CLOSED) {
+                    continueEventSource.close();
+                    continueEventSource = null;
 
                     // Retry SSE connection
                     if (sseRetryCount < MAX_SSE_RETRIES) {
@@ -1087,9 +1123,9 @@
         const tbody = document.getElementById('documentListBody');
         tbody.innerHTML = '';
 
-        const totalPages = Math.ceil(filteredDocuments.length / ITEMS_PER_PAGE);
-        const start = (currentPage - 1) * ITEMS_PER_PAGE;
-        const end = Math.min(start + ITEMS_PER_PAGE, filteredDocuments.length);
+        const totalPages = Math.ceil(filteredDocuments.length / itemsPerPage);
+        const start = (currentPage - 1) * itemsPerPage;
+        const end = Math.min(start + itemsPerPage, filteredDocuments.length);
         const pageDocuments = filteredDocuments.slice(start, end);
 
         pageDocuments.forEach((doc, index) => {
@@ -1170,7 +1206,7 @@
     }
 
     function nextPage() {
-        const totalPages = Math.ceil(filteredDocuments.length / ITEMS_PER_PAGE);
+        const totalPages = Math.ceil(filteredDocuments.length / itemsPerPage);
         if (currentPage < totalPages) {
             currentPage++;
             renderListPage();
@@ -1185,7 +1221,7 @@
     }
 
     function lastPage() {
-        const totalPages = Math.ceil(filteredDocuments.length / ITEMS_PER_PAGE);
+        const totalPages = Math.ceil(filteredDocuments.length / itemsPerPage);
         if (currentPage < totalPages) {
             currentPage = totalPages;
             renderListPage();
@@ -1193,8 +1229,8 @@
     }
 
     function toggleSelectAll(checkbox) {
-        const start = (currentPage - 1) * ITEMS_PER_PAGE;
-        const end = Math.min(start + ITEMS_PER_PAGE, filteredDocuments.length);
+        const start = (currentPage - 1) * itemsPerPage;
+        const end = Math.min(start + itemsPerPage, filteredDocuments.length);
         const pageDocuments = filteredDocuments.slice(start, end);
 
         pageDocuments.forEach(doc => {
@@ -1213,8 +1249,8 @@
         const checkbox = document.getElementById('selectAllCheckbox');
         if (!checkbox) return;
 
-        const start = (currentPage - 1) * ITEMS_PER_PAGE;
-        const end = Math.min(start + ITEMS_PER_PAGE, filteredDocuments.length);
+        const start = (currentPage - 1) * itemsPerPage;
+        const end = Math.min(start + itemsPerPage, filteredDocuments.length);
         const pageDocuments = filteredDocuments.slice(start, end);
 
         const allSelected = pageDocuments.every(doc => selectedDocuments.has(doc.url));
@@ -1698,6 +1734,9 @@
             document.getElementById('mongoFailed').textContent = '0';
             document.getElementById('mongoOverlayBtn').textContent = 'Cancel';
             document.getElementById('mongoSummarizationNote').classList.add('hidden');
+            document.getElementById('mongoNew').textContent = '0';
+            document.getElementById('mongoUpdated').textContent = '0';
+            document.getElementById('mongoUnchanged').textContent = '0';
 
             // Connect to SSE
             mongoEventSource = new EventSource(`/api/download/mongodb/progress/${mongoSessionId}`);
@@ -1709,6 +1748,9 @@
                 document.getElementById('mongoCurrentFile').textContent = `Storing: ${data.current_file}`;
                 document.getElementById('mongoProgress').textContent = `${data.files_completed}/${data.total_files}`;
                 document.getElementById('mongoFailed').textContent = data.files_failed;
+                document.getElementById('mongoNew').textContent = data.files_new || 0;
+                document.getElementById('mongoUpdated').textContent = data.files_updated || 0;
+                document.getElementById('mongoUnchanged').textContent = data.files_unchanged || 0;
             });
 
             mongoEventSource.addEventListener('complete', (e) => {
@@ -1718,7 +1760,16 @@
                 document.getElementById('mongoCurrentFile').textContent = data.message;
                 document.getElementById('mongoProgress').textContent = `${data.files_completed}/${data.total_files}`;
                 document.getElementById('mongoFailed').textContent = data.files_failed;
+                document.getElementById('mongoNew').textContent = data.files_new || 0;
+                document.getElementById('mongoUpdated').textContent = data.files_updated || 0;
+                document.getElementById('mongoUnchanged').textContent = data.files_unchanged || 0;
                 document.getElementById('mongoOverlayBtn').textContent = 'Close';
+
+                // Disable the store button since files are already stored
+                const dlBtn = document.getElementById('downloadBtn');
+                dlBtn.disabled = true;
+                document.getElementById('downloadBtnText').textContent = 'Stored';
+                dlBtn.className = dlBtn.className.replace('bg-blue-600 hover:bg-blue-700', 'bg-gray-400 cursor-not-allowed');
 
                 if (data.summarization_started) {
                     showSummarizationRunning();
@@ -1750,6 +1801,7 @@
             mongoEventSource = null;
         }
         document.getElementById('mongodbOverlay').classList.add('hidden');
+        // Note: summarization polling continues in the background
     }
 
     // --- Summarization status polling ---
@@ -1779,18 +1831,58 @@
             `AI summarization complete: ${parts.join(', ')}.`;
     }
 
-    function pollSummarizationStatus() {
-        if (summarizationPollTimer) clearInterval(summarizationPollTimer);
+    function showToast(message) {
+        const toast = document.getElementById('summarizationToast');
+        document.getElementById('toastMessage').textContent = message;
+        toast.classList.remove('hidden');
+        // Auto-dismiss after 15 seconds
+        setTimeout(dismissToast, 15000);
+    }
 
-        summarizationPollTimer = setInterval(async () => {
+    function dismissToast() {
+        document.getElementById('summarizationToast').classList.add('hidden');
+    }
+
+    function isMongoOverlayVisible() {
+        return !document.getElementById('mongodbOverlay').classList.contains('hidden');
+    }
+
+    function pollSummarizationStatus() {
+        if (summarizationPollTimer) clearTimeout(summarizationPollTimer);
+
+        let consecutiveFailures = 0;
+        const MAX_POLL_FAILURES = 10;
+        const BASE_INTERVAL = 10000;  // 10 seconds
+        let pollBusy = false;
+
+        function schedulePoll() {
+            // Back off on failures: 10s, 20s, 40s, ...
+            const delay = BASE_INTERVAL * Math.pow(2, Math.min(consecutiveFailures, 4));
+            summarizationPollTimer = setTimeout(doPoll, delay);
+        }
+
+        async function doPoll() {
+            if (pollBusy) { schedulePoll(); return; }
+            pollBusy = true;
             try {
                 const resp = await fetch('/api/download/mongodb/summarization/status');
                 const data = await resp.json();
+                consecutiveFailures = 0;
 
                 if (!data.is_running) {
-                    clearInterval(summarizationPollTimer);
                     summarizationPollTimer = null;
+
+                    // Update modal (if still open)
                     showSummarizationComplete(data.stats);
+
+                    // Show toast if modal is closed
+                    if (!isMongoOverlayVisible()) {
+                        const parts = [];
+                        if (data.stats.complete > 0) parts.push(`${data.stats.complete} summarized`);
+                        if (data.stats.failed > 0) parts.push(`${data.stats.failed} failed`);
+                        showToast(parts.join(', '));
+                    }
+                    return; // done, no more polling
                 } else {
                     // Update with progress
                     const s = data.stats;
@@ -1802,9 +1894,28 @@
                     }
                 }
             } catch (e) {
-                // Silently ignore polling errors
+                consecutiveFailures++;
+                if (consecutiveFailures >= MAX_POLL_FAILURES) {
+                    summarizationPollTimer = null;
+                    console.warn('Summarization polling stopped after repeated failures');
+                    return;
+                }
+            } finally {
+                pollBusy = false;
             }
-        }, 3000);
+            schedulePoll();
+        }
+
+        schedulePoll();
     }
+
+    // Clean up all connections on page unload to prevent navigation issues
+    window.addEventListener('beforeunload', () => {
+        if (retryEventSource) { retryEventSource.close(); retryEventSource = null; }
+        if (continueEventSource) { continueEventSource.close(); continueEventSource = null; }
+        if (downloadEventSource) { downloadEventSource.close(); downloadEventSource = null; }
+        if (mongoEventSource) { mongoEventSource.close(); mongoEventSource = null; }
+        if (summarizationPollTimer) { clearTimeout(summarizationPollTimer); summarizationPollTimer = null; }
+    });
 </script>
 {% endblock %}

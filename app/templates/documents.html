@@ -234,6 +234,18 @@
         if (stats.pending > 0) parts.push(`${stats.pending} pending`);
         if (stats.failed > 0) parts.push(`<a href="#" onclick="showFailureDetails(); return false;" class="text-red-600 hover:underline">${stats.failed} failed</a>`);
         if (stats.skipped > 0) parts.push(`${stats.skipped} skipped`);
+
+        // PDF extraction method breakdown
+        const ex = stats.extraction_stats;
+        if (ex && ex.total_pdfs > 0) {
+            const exParts = [];
+            if (ex.pypdf2 > 0) exParts.push(`${ex.pypdf2} PyPDF2`);
+            if (ex.stirling_fast > 0) exParts.push(`${ex.stirling_fast} Stirling`);
+            if (ex.stirling_ocr > 0) exParts.push(`${ex.stirling_ocr} OCR`);
+            if (ex.failed > 0) exParts.push(`${ex.failed} unextracted`);
+            parts.push(`<span class="text-gray-400">|</span> ${ex.total_pdfs} PDFs: ${exParts.join(', ')}`);
+        }
+
         statsText.innerHTML = parts.join(', ');
 
         // Show retry button when there are failures and nothing is pending
@@ -578,6 +590,7 @@
                         ${version ? `<div><span class="text-gray-500">Version:</span> <span class="font-medium">${escapeHtml(version)}</span></div>` : ''}
                         ${docType ? `<div><span class="text-gray-500">Content Type:</span> <span class="font-medium capitalize">${escapeHtml(docType)}</span></div>` : ''}
                         <div class="col-span-2"><span class="text-gray-500">Source:</span> <a href="${escapeHtml(doc.source_url)}" target="_blank" class="text-blue-600 hover:underline break-all text-xs">${escapeHtml(doc.source_url)}</a></div>
+                        ${doc.text_extraction_method ? `<div><span class="text-gray-500">Text Extraction:</span> <span class="font-medium">${escapeHtml(formatExtractionMethod(doc.text_extraction_method))}</span></div>` : ''}
                         ${contentHash ? `<div class="col-span-2"><span class="text-gray-500">Content Hash:</span> <span class="font-mono text-xs text-gray-500">${escapeHtml(contentHash.substring(0, 16))}...</span></div>` : ''}
                     </div>
             `;
@@ -778,6 +791,16 @@
         const units = ['B', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(1024));
         return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+    }
+
+    function formatExtractionMethod(method) {
+        const labels = {
+            'pypdf2': 'PyPDF2 (embedded text)',
+            'stirling_fast': 'Stirling PDF (text)',
+            'stirling_ocr': 'Stirling PDF (OCR)',
+            'standard': 'Standard',
+        };
+        return labels[method] || method;
     }
 
     function escapeHtml(text) {

@@ -115,6 +115,7 @@ async def results_page(request: Request, session_id: str):
         {
             "title": f"Results - {settings.APP_NAME}",
             "session_id": session_id,
+            "results_per_page": runtime_settings.results_per_page,
         },
     )
 

@@ -247,6 +247,9 @@ async def mongodb_download_progress(session_id: str):
         total = len(documents)
         completed = 0
         failed = 0
+        files_new = 0
+        files_updated = 0
+        files_unchanged = 0
         stored_ids = []
 
         try:
@@ -274,6 +277,9 @@ async def mongodb_download_progress(session_id: str):
                             "total_files": total,
                             "files_completed": completed,
                             "files_failed": failed,
+                            "files_new": files_new,
+                            "files_updated": files_updated,
+                            "files_unchanged": files_unchanged,
                             "message": f"Downloading {doc.filename}...",
                         }),
                     }
@@ -289,6 +295,9 @@ async def mongodb_download_progress(session_id: str):
 
                         # Extract text
                         extracted_text, extraction_status = extract_text(file_data, doc.extension)
+                        extraction_method = None
+                        if extraction_status == "complete":
+                            extraction_method = "pypdf2" if doc.extension.lower() == ".pdf" else "standard"
 
                         # Determine content type
                         content_type_map = {
@@ -303,7 +312,7 @@ async def mongodb_download_progress(session_id: str):
                         content_type = content_type_map.get(doc.extension.lower(), "application/octet-stream")
 
                         # Store in MongoDB
-                        doc_id = mongodb_service.store_document(
+                        doc_id, action = mongodb_service.store_document(
                             file_data=file_data,
                             filename=doc.filename,
                             extension=doc.extension,
@@ -314,9 +323,16 @@ async def mongodb_download_progress(session_id: str):
                             content_type=content_type,
                             extracted_text=extracted_text,
                             text_extraction_status=extraction_status,
+                            text_extraction_method=extraction_method,
                         )
                         stored_ids.append(doc_id)
                         completed += 1
+                        if action == "new":
+                            files_new += 1
+                        elif action == "updated":
+                            files_updated += 1
+                        else:
+                            files_unchanged += 1
 
                     except Exception as e:
                         failed += 1
@@ -332,7 +348,10 @@ async def mongodb_download_progress(session_id: str):
             }
             return
 
-        logger.info(f"MongoDB download complete: {completed} stored, {failed} failed")
+        logger.info(
+            f"MongoDB download complete: {files_new} new, {files_updated} updated, "
+            f"{files_unchanged} unchanged, {failed} failed"
+        )
 
         # Check if AI summarization is configured
         ai_configured = bool(
@@ -341,6 +360,18 @@ async def mongodb_download_progress(session_id: str):
             and runtime_settings.ai_model
         )
 
+        # Build summary message
+        msg_parts = []
+        if files_new > 0:
+            msg_parts.append(f"{files_new} new")
+        if files_updated > 0:
+            msg_parts.append(f"{files_updated} updated")
+        if files_unchanged > 0:
+            msg_parts.append(f"{files_unchanged} unchanged")
+        if failed > 0:
+            msg_parts.append(f"{failed} failed")
+        summary_msg = ", ".join(msg_parts) if msg_parts else "No files processed"
+
         yield {
             "event": "complete",
             "data": json.dumps({
@@ -348,7 +379,10 @@ async def mongodb_download_progress(session_id: str):
                 "total_files": total,
                 "files_completed": completed,
                 "files_failed": failed,
-                "message": f"Stored {completed} files in MongoDB, {failed} failed",
+                "files_new": files_new,
+                "files_updated": files_updated,
+                "files_unchanged": files_unchanged,
+                "message": summary_msg,
                 "stored_ids": stored_ids,
                 "summarization_started": ai_configured and completed > 0,
             }),
@@ -384,6 +418,11 @@ async def summarization_status():
     except Exception:
         stats = {"pending": 0, "complete": 0, "failed": 0, "skipped": 0}
 
+    try:
+        extraction_stats = mongodb_service.get_extraction_stats()
+    except Exception:
+        extraction_stats = {"total_pdfs": 0, "pypdf2": 0, "stirling_fast": 0, "stirling_ocr": 0, "failed": 0}
+
     ai_configured = bool(
         runtime_settings.ai_api_url
         and runtime_settings.ai_api_key
@@ -394,6 +433,7 @@ async def summarization_status():
         "ai_configured": ai_configured,
         "is_running": ai_summarization_service.is_running(),
         "stats": stats,
+        "extraction_stats": extraction_stats,
     }
 
 
@@ -465,10 +505,17 @@ async def scan_summary_stats(scan_url: str):
     """Get summary stats for a specific scan."""
     try:
         stats = mongodb_service.get_scan_summary_stats(scan_url)
-        return stats
     except Exception as e:
         logger.error(f"Failed to get scan summary stats: {e}")
-        return {"pending": 0, "complete": 0, "failed": 0, "skipped": 0}
+        stats = {"pending": 0, "complete": 0, "failed": 0, "skipped": 0}
+
+    try:
+        extraction_stats = mongodb_service.get_scan_extraction_stats(scan_url)
+    except Exception as e:
+        logger.error(f"Failed to get scan extraction stats: {e}")
+        extraction_stats = {"total_pdfs": 0, "pypdf2": 0, "stirling_fast": 0, "stirling_ocr": 0, "failed": 0}
+
+    return {**stats, "extraction_stats": extraction_stats}
 
 
 @router.post("/mongodb/scan/summarize")

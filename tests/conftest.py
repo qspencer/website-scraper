@@ -1,5 +1,17 @@
+import os
+import tempfile
+
 import pytest
 from fastapi.testclient import TestClient
+
+# --- Redirect database to a temp file BEFORE any app code touches it ---
+_tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+_tmp_db_path = _tmp_db.name
+_tmp_db.close()
+
+import app.core.database as _db_module
+_db_module.DB_PATH = _tmp_db_path
+_db_module.init_database()
 
 from app.main import app
 

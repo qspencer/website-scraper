@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     # Scraping settings
     REQUEST_TIMEOUT: int = 30
     MAX_CONCURRENT_REQUESTS: int = 10
-    DEFAULT_CRAWL_DEPTH: int = 2
+    DEFAULT_CRAWL_DEPTH: int = 5
     MAX_CRAWL_DEPTH: int = 10
     MAX_PAGES_TO_SCAN: int = 500  # Pages per batch (can continue scanning)
     USER_AGENT: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # Download settings
     DEFAULT_DOWNLOAD_DIR: str = "./downloads"
     MAX_FILE_SIZE_MB: int = 100
+
+    # Display
+    RESULTS_PER_PAGE: int = 50
 
     # History
     SCAN_HISTORY_LIMIT: int = 20

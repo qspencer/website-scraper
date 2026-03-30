@@ -8,8 +8,8 @@ from app.schemas.document import DocumentInfo
 class ScrapeRequest(BaseModel):
     url: str
     document_type_filter: DocumentTypeFilter = DocumentTypeFilter.COMMON
-    crawl_option: CrawlDepthOption = CrawlDepthOption.SINGLE_PAGE
-    max_depth: int = Field(default=2, ge=1)
+    crawl_option: CrawlDepthOption = CrawlDepthOption.FOLLOW_LINKS
+    max_depth: int = Field(default=5, ge=1)
     scan_all_pages: bool = False
 
     @field_validator("url")

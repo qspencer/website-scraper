@@ -14,40 +14,9 @@ from app.core import database as db
 
 @pytest.fixture(autouse=True)
 def isolate_history():
-    """Back up existing history, clear for test, then restore after."""
-    with db.get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM scan_history ORDER BY id")
-        backup = [dict(row) for row in cursor.fetchall()]
-
+    """Clear history before each test (tests run against a temp database)."""
     clear_history()
     yield
-    clear_history()
-
-    # Restore original history
-    if backup:
-        with db.get_db() as conn:
-            cursor = conn.cursor()
-            for row in backup:
-                cursor.execute("""
-                    INSERT INTO scan_history (
-                        url, crawl_option, max_depth, scan_mode, document_filter,
-                        pages_scanned, documents_found, scan_error_count, document_error_count,
-                        duration_seconds, total_size_bytes,
-                        largest_file_name, largest_file_size,
-                        smallest_file_name, smallest_file_size,
-                        started_at, completed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    row["url"], row["crawl_option"], row["max_depth"],
-                    row["scan_mode"], row["document_filter"],
-                    row["pages_scanned"], row["documents_found"],
-                    row["scan_error_count"], row["document_error_count"],
-                    row["duration_seconds"], row["total_size_bytes"],
-                    row["largest_file_name"], row["largest_file_size"],
-                    row["smallest_file_name"], row["smallest_file_size"],
-                    row["started_at"], row["completed_at"],
-                ))
 
 
 def _make_scan_data(**overrides):

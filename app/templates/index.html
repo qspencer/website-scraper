@@ -77,7 +77,6 @@
                             type="radio"
                             name="crawl_option"
                             value="single"
-                            checked
                             class="w-4 h-4 text-blue-600 focus:ring-blue-500"
                             onchange="toggleDepthSlider()"
                         >
@@ -89,13 +88,14 @@
                                 type="radio"
                                 name="crawl_option"
                                 value="follow"
+                                checked
                                 class="w-4 h-4 text-blue-600 focus:ring-blue-500"
                                 onchange="toggleDepthSlider()"
                             >
-                            <span class="ml-3 text-gray-700">Follow internal links <span id="depthDisplay" class="text-blue-600 hidden">(depth: <span id="depthDisplayValue">{{ default_depth }}</span>)</span></span>
+                            <span class="ml-3 text-gray-700">Follow internal links <span id="depthDisplay" class="text-blue-600">(depth: <span id="depthDisplayValue">{{ default_depth }}</span>)</span></span>
                         </label>
                         <!-- Inline depth control -->
-                        <div id="depthControlInline" class="items-center gap-2" style="display: none;">
+                        <div id="depthControlInline" class="items-center gap-2" style="display: flex;">
                             <button type="button" onclick="adjustDepth(-1)" class="w-7 h-7 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium transition">-</button>
                             <input
                                 type="number"
@@ -111,12 +111,13 @@
                         </div>
                     </div>
                     <!-- Scan all pages option (only visible when following links) -->
-                    <div id="scanAllOption" class="ml-7 hidden">
+                    <div id="scanAllOption" class="ml-7">
                         <label class="flex items-center cursor-pointer">
                             <input
                                 type="checkbox"
                                 id="scanAllPages"
                                 name="scan_all_pages"
+                                checked
                                 class="w-4 h-4 text-blue-600 focus:ring-blue-500 rounded"
                             >
                             <span class="ml-2 text-gray-700">Scan entire site without pausing</span>
@@ -150,6 +151,10 @@
                 <div class="flex justify-between">
                     <span>Pages scanned: <span id="pagesScanned" class="font-medium">0</span></span>
                     <span>Documents found: <span id="documentsFound" class="font-medium text-green-600">0</span></span>
+                </div>
+                <div class="flex justify-between text-gray-400">
+                    <span>Elapsed: <span id="elapsedTime" class="font-medium">0s</span></span>
+                    <span>Avg: <span id="avgPerPage" class="font-medium">--</span>/page</span>
                 </div>
                 <div id="etaRow" class="flex justify-between text-amber-600 hidden">
                     <span id="pagesRemaining">0 pages remaining</span>
@@ -276,6 +281,23 @@
     let eventSource = null;
     let scanStartTime = null;
     let lastPagesScanned = 0;
+    let elapsedTimer = null;
+
+    function updateElapsedTime() {
+        if (!scanStartTime) return;
+        const elapsed = (Date.now() - scanStartTime) / 1000;
+        document.getElementById('elapsedTime').textContent = formatTimeEstimate(elapsed);
+    }
+
+    function updateAvgPerPage(pagesScanned) {
+        if (!scanStartTime || pagesScanned <= 0) {
+            document.getElementById('avgPerPage').textContent = '--';
+            return;
+        }
+        const elapsed = (Date.now() - scanStartTime) / 1000;
+        const avg = elapsed / pagesScanned;
+        document.getElementById('avgPerPage').textContent = avg < 1 ? `${(avg * 1000).toFixed(0)}ms` : `${avg.toFixed(1)}s`;
+    }
 
     function formatTimeEstimate(seconds) {
         if (!seconds || seconds < 0 || !isFinite(seconds)) return 'Calculating...';
@@ -355,11 +377,15 @@
             document.getElementById('progressStatus').textContent = 'Starting scan...';
             document.getElementById('pagesScanned').textContent = '0';
             document.getElementById('documentsFound').textContent = '0';
+            document.getElementById('elapsedTime').textContent = '0s';
+            document.getElementById('avgPerPage').textContent = '--';
             document.getElementById('etaRow').classList.add('hidden');
 
             // Initialize time tracking
             scanStartTime = Date.now();
             lastPagesScanned = 0;
+            if (elapsedTimer) clearInterval(elapsedTimer);
+            elapsedTimer = setInterval(updateElapsedTime, 1000);
 
             // Connect to SSE
             eventSource = new EventSource(`/api/scrape/progress/${currentSessionId}`);
@@ -369,6 +395,7 @@
                 document.getElementById('progressStatus').textContent = data.message || 'Scanning...';
                 document.getElementById('pagesScanned').textContent = data.pages_scanned;
                 document.getElementById('documentsFound').textContent = data.documents_found;
+                updateAvgPerPage(data.pages_scanned);
 
                 // Show pages remaining and ETA if available
                 if (data.total_pages_queued !== undefined && data.total_pages_queued > 0) {
@@ -387,6 +414,7 @@
             eventSource.addEventListener('complete', (e) => {
                 const data = JSON.parse(e.data);
                 eventSource.close();
+                if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
 
                 document.getElementById('progressStatus').textContent = 'Complete! Redirecting...';
                 document.getElementById('etaRow').classList.add('hidden');
@@ -472,6 +500,7 @@
     }
 
     function resetForm() {
+        if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
         document.getElementById('progressOverlay').classList.add('hidden');
         const submitBtn = document.getElementById('submitBtn');
         const btnText = document.getElementById('btnText');

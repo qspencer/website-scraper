@@ -296,7 +296,7 @@ async def cancel_scrape(session_id: str):
     return {"message": "Cancellation requested"}
 
 
-@router.post("/retry/{session_id}")
+@router.get("/retry/{session_id}")
 async def retry_errors(session_id: str):
     """Retry failed pages and inaccessible documents via SSE."""
     if session_id not in scrape_sessions:

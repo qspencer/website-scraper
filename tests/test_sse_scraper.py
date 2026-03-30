@@ -336,7 +336,7 @@ class TestRetrySSE:
 
         with patch("app.api.routes.scraper.scraper_service") as mock_ss:
             mock_ss.get_file_info = AsyncMock(return_value=recovered)
-            response = client.post(f"/api/scrape/retry/{session_id}")
+            response = client.get(f"/api/scrape/retry/{session_id}")
 
         assert response.status_code == 200
         body = response.text
@@ -366,7 +366,7 @@ class TestRetrySSE:
 
         with patch("app.api.routes.scraper.scraper_service") as mock_ss:
             mock_ss.get_file_info = AsyncMock(return_value=still_failed)
-            response = client.post(f"/api/scrape/retry/{session_id}")
+            response = client.get(f"/api/scrape/retry/{session_id}")
 
         assert response.status_code == 200
         for line in response.text.split("\n"):
@@ -394,7 +394,7 @@ class TestRetrySSE:
 
         with patch("app.api.routes.scraper.scraper_service") as mock_ss:
             mock_ss.scan_page = AsyncMock(return_value=([], [new_doc], None))
-            response = client.post(f"/api/scrape/retry/{session_id}")
+            response = client.get(f"/api/scrape/retry/{session_id}")
 
         assert response.status_code == 200
         for line in response.text.split("\n"):
@@ -405,12 +405,12 @@ class TestRetrySSE:
                     assert data["new_docs_found"] == 1
 
     async def test_retry_not_found(self, client):
-        response = client.post("/api/scrape/retry/nonexistent")
+        response = client.get("/api/scrape/retry/nonexistent")
         assert response.status_code == 404
 
     async def test_retry_no_result(self, client):
         session_id = _create_session()
-        response = client.post(f"/api/scrape/retry/{session_id}")
+        response = client.get(f"/api/scrape/retry/{session_id}")
         assert response.status_code == 400
 
     async def test_retry_no_errors(self, client):
@@ -424,5 +424,5 @@ class TestRetrySSE:
         session_id = _create_session(
             result=result, crawl_state=state, status="complete"
         )
-        response = client.post(f"/api/scrape/retry/{session_id}")
+        response = client.get(f"/api/scrape/retry/{session_id}")
         assert response.status_code == 400

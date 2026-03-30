@@ -9,20 +9,87 @@ LOG_FILE="$PROJECT_DIR/logs/uvicorn.log"
 HOST="127.0.0.1"
 PORT=8000
 
+STIRLING_IMAGE="ghcr.io/stirling-tools/stirling-pdf:2.7.2-fat"
+STIRLING_NAME="stirling-pdf"
+STIRLING_PORT=8080
+STIRLING_CPUS=2
+STIRLING_MEMORY="2g"
+
 cd "$PROJECT_DIR"
 
 # --- Helper functions ---
 
 cleanup_old_process() {
+    # Kill by PID file
     if [ -f "$PID_FILE" ]; then
         OLD_PID=$(cat "$PID_FILE")
         if kill -0 "$OLD_PID" 2>/dev/null; then
             echo "Stopping previous instance (PID $OLD_PID)..."
             kill "$OLD_PID" 2>/dev/null || true
-            sleep 1
+            sleep 2
+            # Force kill if still running
+            if kill -0 "$OLD_PID" 2>/dev/null; then
+                echo "Force killing PID $OLD_PID..."
+                kill -9 "$OLD_PID" 2>/dev/null || true
+                sleep 1
+            fi
         fi
         rm -f "$PID_FILE"
     fi
+
+    # Also kill anything still on the port
+    local PORT_PIDS
+    PORT_PIDS=$(lsof -ti :"$PORT" 2>/dev/null || true)
+    if [ -n "$PORT_PIDS" ]; then
+        echo "Killing remaining processes on port $PORT..."
+        echo "$PORT_PIDS" | xargs kill -9 2>/dev/null || true
+        sleep 1
+    fi
+}
+
+ensure_stirling_pdf() {
+    if ! command -v docker &>/dev/null; then
+        echo "WARNING: Docker not found — Stirling PDF (OCR) will not be available."
+        return
+    fi
+
+    # Check if container exists
+    if docker inspect "$STIRLING_NAME" &>/dev/null; then
+        # Container exists — start it if stopped
+        if [ "$(docker inspect -f '{{.State.Running}}' "$STIRLING_NAME")" != "true" ]; then
+            echo "Starting Stirling PDF container..."
+            docker start "$STIRLING_NAME" >/dev/null
+        else
+            echo "Stirling PDF already running."
+        fi
+    else
+        # Container doesn't exist — create and start it
+        echo "Creating Stirling PDF container..."
+        docker run -d \
+            --name "$STIRLING_NAME" \
+            --cpus "$STIRLING_CPUS" \
+            --memory "$STIRLING_MEMORY" \
+            --memory-swap "$STIRLING_MEMORY" \
+            -p "$STIRLING_PORT:8080" \
+            -e SECURITY_ENABLELOGIN=false \
+            "$STIRLING_IMAGE"
+    fi
+
+    # Wait for Stirling to be ready
+    if curl -sf "http://localhost:$STIRLING_PORT/api/v1/info/status" >/dev/null 2>&1; then
+        echo "Stirling PDF is ready."
+        return
+    fi
+    echo -n "Waiting for Stirling PDF to be ready..."
+    for i in $(seq 1 30); do
+        if curl -sf "http://localhost:$STIRLING_PORT/api/v1/info/status" >/dev/null 2>&1; then
+            echo " ready."
+            return
+        fi
+        echo -n "."
+        sleep 2
+    done
+    echo " WARNING: Stirling PDF did not become ready within 60s (OCR may not work)."
 }
 
 # --- Create virtual environment if needed ---
@@ -53,6 +120,10 @@ else
     exit 1
 fi
 
+# --- Ensure Stirling PDF is running ---
+
+ensure_stirling_pdf
+
 # --- Stop any previous instance ---
 
 cleanup_old_process
@@ -74,6 +145,7 @@ if kill -0 "$APP_PID" 2>/dev/null; then
     echo "  App is running (PID $APP_PID)"
     echo "  URL: http://$HOST:$PORT/"
     echo "  Log: $LOG_FILE"
+    echo "  Stirling PDF: http://localhost:$STIRLING_PORT/"
     echo "  Stop: kill $APP_PID"
     echo "========================================="
 else

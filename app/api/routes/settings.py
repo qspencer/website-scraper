@@ -21,6 +21,7 @@ class SettingsUpdate(BaseModel):
     default_crawl_depth: Optional[int] = None
     max_crawl_depth: Optional[int] = None
     max_concurrent_requests: Optional[int] = None
+    results_per_page: Optional[int] = None
     scan_history_limit: Optional[int] = None
     mongodb_uri: Optional[str] = None
     mongodb_database: Optional[str] = None
@@ -38,6 +39,7 @@ class SettingsResponse(BaseModel):
     default_crawl_depth: int
     max_crawl_depth: int
     max_concurrent_requests: int
+    results_per_page: int
     scan_history_limit: int
     mongodb_uri: str
     mongodb_database: str

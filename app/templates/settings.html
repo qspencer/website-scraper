@@ -150,6 +150,27 @@
                 <p class="mt-1 text-sm text-gray-500">Number of past scans to keep in history.</p>
             </div>
 
+            <!-- Results Per Page -->
+            <div>
+                <label for="results_per_page" class="block text-sm font-medium text-gray-700 mb-2">
+                    Results Per Page
+                </label>
+                <div class="flex items-center gap-4">
+                    <select
+                        id="results_per_page"
+                        name="results_per_page"
+                        class="w-32 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+                    >
+                        <option value="25" {% if settings.results_per_page == 25 %}selected{% endif %}>25</option>
+                        <option value="50" {% if settings.results_per_page == 50 %}selected{% endif %}>50</option>
+                        <option value="100" {% if settings.results_per_page == 100 %}selected{% endif %}>100</option>
+                        <option value="0" {% if settings.results_per_page == 0 %}selected{% endif %}>All</option>
+                    </select>
+                    <span class="text-sm text-gray-500">documents per page</span>
+                </div>
+                <p class="mt-1 text-sm text-gray-500">Number of documents to show per page on the results page.</p>
+            </div>
+
             <!-- MongoDB Section -->
             <div class="pt-4 border-t">
                 <h2 class="text-lg font-semibold text-gray-800 mb-4">MongoDB Storage</h2>
@@ -276,7 +297,9 @@
             <div class="flex gap-4 pt-4 border-t">
                 <button
                     type="submit"
-                    class="flex-1 py-3 px-4 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 focus:ring-4 focus:ring-blue-300 transition"
+                    id="saveBtn"
+                    disabled
+                    class="flex-1 py-3 px-4 bg-gray-400 text-white font-medium rounded-lg cursor-not-allowed transition"
                 >
                     Save Settings
                 </button>
@@ -309,6 +332,7 @@
             max_concurrent_requests: parseInt(form.max_concurrent_requests.value),
             default_crawl_depth: parseInt(form.default_crawl_depth.value),
             max_crawl_depth: parseInt(form.max_crawl_depth.value),
+            results_per_page: parseInt(form.results_per_page.value),
             scan_history_limit: parseInt(form.scan_history_limit.value),
             mongodb_uri: form.mongodb_uri.value,
             mongodb_database: form.mongodb_database.value,
@@ -329,6 +353,8 @@
                 const result = await response.json();
                 showStatus('Settings saved successfully!', 'success');
                 updateFormValues(result);
+                captureInitialValues();
+                checkDirty();
             } else {
                 const error = await response.json();
                 showStatus('Error: ' + (error.detail || 'Failed to save settings'), 'error');
@@ -352,6 +378,8 @@
                 const result = await response.json();
                 showStatus('Settings reset to defaults!', 'success');
                 updateFormValues(result);
+                captureInitialValues();
+                checkDirty();
             } else {
                 showStatus('Error: Failed to reset settings', 'error');
             }
@@ -367,6 +395,7 @@
         document.getElementById('max_concurrent_requests').value = settings.max_concurrent_requests;
         document.getElementById('default_crawl_depth').value = settings.default_crawl_depth;
         document.getElementById('max_crawl_depth').value = settings.max_crawl_depth;
+        document.getElementById('results_per_page').value = settings.results_per_page;
         document.getElementById('scan_history_limit').value = settings.scan_history_limit;
         document.getElementById('mongodb_uri').value = settings.mongodb_uri;
         document.getElementById('mongodb_database').value = settings.mongodb_database;
@@ -422,6 +451,46 @@
             eyeOffIcon.classList.add('hidden');
         }
     }
+
+    // --- Dirty-tracking: enable Save only when form values differ from initial ---
+    let initialValues = {};
+    const saveBtn = document.getElementById('saveBtn');
+
+    function captureInitialValues() {
+        const form = document.getElementById('settingsForm');
+        initialValues = {};
+        for (const el of form.elements) {
+            if (el.name) initialValues[el.name] = el.value;
+        }
+    }
+
+    function checkDirty() {
+        const form = document.getElementById('settingsForm');
+        let dirty = false;
+        for (const el of form.elements) {
+            if (el.name && initialValues[el.name] !== undefined && el.value !== initialValues[el.name]) {
+                dirty = true;
+                break;
+            }
+        }
+        if (dirty) {
+            saveBtn.disabled = false;
+            saveBtn.className = 'flex-1 py-3 px-4 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 focus:ring-4 focus:ring-blue-300 transition';
+        } else {
+            saveBtn.disabled = true;
+            saveBtn.className = 'flex-1 py-3 px-4 bg-gray-400 text-white font-medium rounded-lg cursor-not-allowed transition';
+        }
+    }
+
+    captureInitialValues();
+    document.getElementById('settingsForm').addEventListener('input', checkDirty);
+    document.getElementById('settingsForm').addEventListener('change', checkDirty);
+
+    window.addEventListener('beforeunload', (e) => {
+        if (!saveBtn.disabled) {
+            e.preventDefault();
+        }
+    });
 
     function showStatus(message, type) {
         const container = document.getElementById('statusMessage');

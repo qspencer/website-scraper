@@ -168,7 +168,7 @@ class TestMongoDBService:
         mock_get_col.return_value = mock_col
 
         with patch("gridfs.GridFS", return_value=mock_fs):
-            doc_id = mongodb_service.store_document(
+            doc_id, action = mongodb_service.store_document(
                 file_data=b"test content",
                 filename="test.pdf",
                 extension=".pdf",
@@ -182,6 +182,7 @@ class TestMongoDBService:
             )
 
         assert doc_id is not None
+        assert action == "new"
         mock_fs.put.assert_called_once()
         mock_col.insert_one.assert_called_once()
 
@@ -216,7 +217,7 @@ class TestMongoDBService:
         mock_fs.put.return_value = new_gridfs_id
 
         with patch("gridfs.GridFS", return_value=mock_fs):
-            doc_id = mongodb_service.store_document(
+            doc_id, action = mongodb_service.store_document(
                 file_data=b"updated content",
                 filename="test.pdf",
                 extension=".pdf",
@@ -229,8 +230,9 @@ class TestMongoDBService:
                 text_extraction_status="complete",
             )
 
-        # Should return the existing document's ID
+        # Should return the existing document's ID and "updated" action
         assert doc_id == str(existing_id)
+        assert action == "updated"
 
         # Should delete the old GridFS file
         mock_fs.delete.assert_called_once_with(old_gridfs_id)
