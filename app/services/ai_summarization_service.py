@@ -1,6 +1,7 @@
 """Service for generating AI summaries of documents stored in MongoDB."""
 
 import asyncio
+import functools
 import json
 from typing import Dict, Any, Optional
 
@@ -12,8 +13,17 @@ from app.services import mongodb_service
 
 logger = get_logger(__name__)
 
+
+async def _run_sync(func, *args, **kwargs):
+    """Run a synchronous function in a thread executor to avoid blocking the event loop."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+
 # Track whether a summarization task is currently running
 _running = False
+
+# Progress info visible to the status endpoint
+_progress: Dict[str, Any] = {}
 
 # Maximum characters of extracted text to send to the AI
 MAX_TEXT_LENGTH = 12000
@@ -341,25 +351,36 @@ async def summarize_pending_documents() -> Dict[str, int]:
         return {"processed": 0, "succeeded": 0, "failed": 0, "skipped": 0}
 
     _running = True
+    _progress.clear()
     stats = {"processed": 0, "succeeded": 0, "failed": 0, "skipped": 0}
 
     try:
         # Re-attempt text extraction for previously failed documents
-        extraction_stats = mongodb_service.retry_text_extraction()
+        # (runs in thread to avoid blocking event loop — OCR can take minutes)
+        def _on_extraction_progress(info: dict):
+            _progress.update({"phase": "extracting", **info})
+
+        _progress.update({"phase": "extracting", "current": 0, "total": 0, "current_file": ""})
+        extraction_stats = await _run_sync(
+            mongodb_service.retry_text_extraction,
+            progress_callback=_on_extraction_progress,
+        )
         if extraction_stats["succeeded"] > 0:
             logger.info(
                 f"Re-extracted text for {extraction_stats['succeeded']} documents "
                 f"({extraction_stats['stirling_fast']} fast, {extraction_stats['stirling_ocr']} OCR)"
             )
 
+        _progress.update({"phase": "summarizing", "current": 0, "total": 0, "current_file": ""})
+
         # Mark documents with failed/unsupported text extraction as summary-failed
-        skipped = mongodb_service.mark_unsummarizable_documents()
+        skipped = await _run_sync(mongodb_service.mark_unsummarizable_documents)
         if skipped > 0:
             stats["skipped"] += skipped
             logger.info(f"Marked {skipped} documents as unsummarizable (text extraction failed)")
 
         while True:
-            pending = mongodb_service.get_pending_summaries(limit=100)
+            pending = await _run_sync(mongodb_service.get_pending_summaries, limit=100)
             if not pending:
                 break
             logger.info(f"Found {len(pending)} documents pending summarization")
@@ -371,7 +392,8 @@ async def summarize_pending_documents() -> Dict[str, int]:
                 extension = doc.get("extension", "")
 
                 if not text or not text.strip():
-                    mongodb_service.mark_summary_failed(
+                    await _run_sync(
+                        mongodb_service.mark_summary_failed,
                         doc_id, error="No extracted text available"
                     )
                     stats["skipped"] += 1
@@ -384,7 +406,7 @@ async def summarize_pending_documents() -> Dict[str, int]:
                 system_prompt = ""
                 if extension.lower() in _SPREADSHEET_EXTENSIONS:
                     from app.services.text_extraction_service import extract_spreadsheet_metadata
-                    file_data = mongodb_service.get_document_file(doc_id)
+                    file_data = await _run_sync(mongodb_service.get_document_file, doc_id)
                     if file_data:
                         metadata = extract_spreadsheet_metadata(file_data, extension)
                         if metadata:
@@ -395,11 +417,15 @@ async def summarize_pending_documents() -> Dict[str, int]:
                 result = await _call_ai_api(filename, prompt_text, system_prompt=system_prompt)
 
                 if "error" in result:
-                    mongodb_service.mark_summary_failed(doc_id, error=result["error"])
+                    await _run_sync(
+                        mongodb_service.mark_summary_failed,
+                        doc_id, error=result["error"]
+                    )
                     stats["failed"] += 1
                     logger.warning(f"Failed to summarize: {filename}")
                 else:
-                    mongodb_service.update_summary(
+                    await _run_sync(
+                        mongodb_service.update_summary,
                         doc_id=doc_id,
                         summary=result["summary"],
                         keywords=result["keywords"],
@@ -418,6 +444,7 @@ async def summarize_pending_documents() -> Dict[str, int]:
         logger.error(f"Summarization task error: {e}", exc_info=True)
     finally:
         _running = False
+        _progress.clear()
 
     logger.info(
         f"Summarization complete: {stats['succeeded']} succeeded, "
@@ -429,3 +456,8 @@ async def summarize_pending_documents() -> Dict[str, int]:
 def is_running() -> bool:
     """Check if summarization is currently running."""
     return _running
+
+
+def get_progress() -> Dict[str, Any]:
+    """Get current progress info (phase, current, total, current_file)."""
+    return dict(_progress)

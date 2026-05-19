@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import functools
 import io
 import json
 import uuid
@@ -28,6 +29,12 @@ from app.api.routes.scraper import scrape_sessions
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/download", tags=["downloads"])
+
+
+async def _run_sync(func, *args, **kwargs):
+    """Run a synchronous function in a thread executor to avoid blocking the event loop."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 
 # In-memory download session storage
 download_sessions: Dict[str, dict] = {}
@@ -251,6 +258,7 @@ async def mongodb_download_progress(session_id: str):
         files_updated = 0
         files_unchanged = 0
         stored_ids = []
+        file_errors = []  # list of {filename, error} dicts
 
         try:
             session_obj = download_sessions[session_id]
@@ -288,13 +296,17 @@ async def mongodb_download_progress(session_id: str):
                         async with http_session.get(doc.url) as response:
                             if response.status != 200:
                                 failed += 1
-                                logger.warning(f"MongoDB download failed: {doc.url} (HTTP {response.status})")
+                                error_msg = f"HTTP {response.status}"
+                                file_errors.append({"filename": doc.filename, "error": error_msg})
+                                logger.warning(f"MongoDB download failed: {doc.url} ({error_msg})")
                                 continue
 
                             file_data = await response.read()
 
-                        # Extract text
-                        extracted_text, extraction_status = extract_text(file_data, doc.extension)
+                        # Extract text (run in thread to avoid blocking event loop)
+                        extracted_text, extraction_status, extraction_error = await _run_sync(
+                            extract_text, file_data, doc.extension
+                        )
                         extraction_method = None
                         if extraction_status == "complete":
                             extraction_method = "pypdf2" if doc.extension.lower() == ".pdf" else "standard"
@@ -311,8 +323,9 @@ async def mongodb_download_progress(session_id: str):
                         }
                         content_type = content_type_map.get(doc.extension.lower(), "application/octet-stream")
 
-                        # Store in MongoDB
-                        doc_id, action = mongodb_service.store_document(
+                        # Store in MongoDB (run in thread to avoid blocking event loop)
+                        doc_id, action = await _run_sync(
+                            mongodb_service.store_document,
                             file_data=file_data,
                             filename=doc.filename,
                             extension=doc.extension,
@@ -324,6 +337,7 @@ async def mongodb_download_progress(session_id: str):
                             extracted_text=extracted_text,
                             text_extraction_status=extraction_status,
                             text_extraction_method=extraction_method,
+                            text_extraction_error=extraction_error or None,
                         )
                         stored_ids.append(doc_id)
                         completed += 1
@@ -336,6 +350,8 @@ async def mongodb_download_progress(session_id: str):
 
                     except Exception as e:
                         failed += 1
+                        error_msg = str(e)[:200]
+                        file_errors.append({"filename": doc.filename, "error": error_msg})
                         logger.error(f"Failed to download/store {doc.filename}: {e}")
 
             session_obj["status"] = "complete"
@@ -384,6 +400,7 @@ async def mongodb_download_progress(session_id: str):
                 "files_unchanged": files_unchanged,
                 "message": summary_msg,
                 "stored_ids": stored_ids,
+                "file_errors": file_errors[:50],
                 "summarization_started": ai_configured and completed > 0,
             }),
         }
@@ -432,6 +449,7 @@ async def summarization_status():
     return {
         "ai_configured": ai_configured,
         "is_running": ai_summarization_service.is_running(),
+        "progress": ai_summarization_service.get_progress(),
         "stats": stats,
         "extraction_stats": extraction_stats,
     }
@@ -466,7 +484,7 @@ async def search_mongodb_documents(
             query=q,
             scan_url=scan_url or None,
             extension=extension or None,
-            limit=min(limit, 200),
+            limit=min(limit, 1000) if limit > 0 else 1000,
         )
         return {"results": results, "count": len(results)}
     except Exception as e:

@@ -35,7 +35,8 @@ class RuntimeSettings:
     def __init__(self):
         # Load settings from database, falling back to defaults
         self._settings: Dict[str, Any] = self._load_from_database()
-        logger.info(f"Settings loaded: {self._settings}")
+        # Log a summary only — never the values, which include ai_api_key and mongodb_uri (may contain credentials).
+        logger.info("Settings loaded: %d keys", len(self._settings))
 
     def _load_from_database(self) -> Dict[str, Any]:
         """Load settings from database, using defaults for missing values."""

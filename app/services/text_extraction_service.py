@@ -8,7 +8,7 @@ from app.core.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def extract_text(file_data: bytes, extension: str) -> Tuple[str, str]:
+def extract_text(file_data: bytes, extension: str) -> Tuple[str, str, str]:
     """
     Extract text from a document.
 
@@ -17,8 +17,9 @@ def extract_text(file_data: bytes, extension: str) -> Tuple[str, str]:
         extension: File extension (e.g. ".pdf", ".docx")
 
     Returns:
-        Tuple of (extracted_text, status) where status is
-        "complete", "failed", or "unsupported"
+        Tuple of (extracted_text, status, error) where status is
+        "complete", "failed", or "unsupported", and error is a
+        human-readable reason on failure (empty string on success).
     """
     ext = extension.lower().lstrip(".")
 
@@ -26,6 +27,8 @@ def extract_text(file_data: bytes, extension: str) -> Tuple[str, str]:
         "pdf": _extract_pdf,
         "docx": _extract_docx,
         "doc": _extract_docx,  # python-docx can sometimes handle .doc
+        "pptx": _extract_pptx,
+        "ppt": _extract_pptx,
         "xlsx": _extract_xlsx,
         "xls": _extract_xls,
         "txt": _extract_text_file,
@@ -40,19 +43,19 @@ def extract_text(file_data: bytes, extension: str) -> Tuple[str, str]:
     extractor = extractors.get(ext)
     if not extractor:
         logger.debug(f"No text extractor for .{ext}")
-        return "", "unsupported"
+        return "", "unsupported", f"No text extractor for .{ext} files"
 
     try:
         text = extractor(file_data)
         if text and text.strip():
             logger.debug(f"Extracted {len(text)} chars from .{ext} file")
-            return text.strip(), "complete"
+            return text.strip(), "complete", ""
         else:
             logger.debug(f"No text content extracted from .{ext} file")
-            return "", "failed"
+            return "", "failed", f"No text content found in .{ext} file"
     except Exception as e:
         logger.warning(f"Text extraction failed for .{ext}: {e}")
-        return "", "failed"
+        return "", "failed", f"Extraction error: {e}"
 
 
 def _extract_pdf(file_data: bytes) -> str:
@@ -75,6 +78,30 @@ def _extract_docx(file_data: bytes) -> str:
     doc = Document(io.BytesIO(file_data))
     paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
     return "\n\n".join(paragraphs)
+
+
+def _extract_pptx(file_data: bytes) -> str:
+    """Extract text from a PowerPoint file."""
+    from pptx import Presentation
+
+    prs = Presentation(io.BytesIO(file_data))
+    slides = []
+    for i, slide in enumerate(prs.slides, 1):
+        texts = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for paragraph in shape.text_frame.paragraphs:
+                    text = paragraph.text.strip()
+                    if text:
+                        texts.append(text)
+            if shape.has_table:
+                for row in shape.table.rows:
+                    cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if cells:
+                        texts.append(" | ".join(cells))
+        if texts:
+            slides.append(f"[Slide {i}]\n" + "\n".join(texts))
+    return "\n\n".join(slides)
 
 
 def _extract_xlsx(file_data: bytes) -> str:

@@ -7,93 +7,93 @@ from app.services.text_extraction_service import extract_text, extract_spreadshe
 
 class TestExtractText:
     def test_unsupported_extension(self):
-        text, status = extract_text(b"data", ".zip")
+        text, status, *_ = extract_text(b"data", ".zip")
         assert text == ""
         assert status == "unsupported"
 
     def test_unsupported_extension_unknown(self):
-        text, status = extract_text(b"data", ".exe")
+        text, status, *_ = extract_text(b"data", ".exe")
         assert text == ""
         assert status == "unsupported"
 
     def test_plain_text_utf8(self):
         content = "Hello, world! This is a test."
-        text, status = extract_text(content.encode("utf-8"), ".txt")
+        text, status, *_ = extract_text(content.encode("utf-8"), ".txt")
         assert status == "complete"
         assert text == content
 
     def test_plain_text_csv(self):
         content = "name,age\nAlice,30\nBob,25"
-        text, status = extract_text(content.encode("utf-8"), ".csv")
+        text, status, *_ = extract_text(content.encode("utf-8"), ".csv")
         assert status == "complete"
         assert "Alice" in text
 
     def test_plain_text_md(self):
         content = "# Heading\n\nParagraph text."
-        text, status = extract_text(content.encode("utf-8"), ".md")
+        text, status, *_ = extract_text(content.encode("utf-8"), ".md")
         assert status == "complete"
         assert "Heading" in text
 
     def test_plain_text_json(self):
         content = '{"key": "value"}'
-        text, status = extract_text(content.encode("utf-8"), ".json")
+        text, status, *_ = extract_text(content.encode("utf-8"), ".json")
         assert status == "complete"
         assert "key" in text
 
     def test_plain_text_xml(self):
         content = "<root><item>test</item></root>"
-        text, status = extract_text(content.encode("utf-8"), ".xml")
+        text, status, *_ = extract_text(content.encode("utf-8"), ".xml")
         assert status == "complete"
         assert "test" in text
 
     def test_plain_text_html(self):
         content = "<html><body>Hello</body></html>"
-        text, status = extract_text(content.encode("utf-8"), ".html")
+        text, status, *_ = extract_text(content.encode("utf-8"), ".html")
         assert status == "complete"
         assert "Hello" in text
 
     def test_plain_text_htm(self):
         content = "<html><body>Hello</body></html>"
-        text, status = extract_text(content.encode("utf-8"), ".htm")
+        text, status, *_ = extract_text(content.encode("utf-8"), ".htm")
         assert status == "complete"
 
     def test_plain_text_latin1(self):
         content = "Héllo wörld"
-        text, status = extract_text(content.encode("latin-1"), ".txt")
+        text, status, *_ = extract_text(content.encode("latin-1"), ".txt")
         assert status == "complete"
         assert "wörld" in text or "rld" in text
 
     def test_empty_text_file(self):
-        text, status = extract_text(b"", ".txt")
+        text, status, *_ = extract_text(b"", ".txt")
         assert status == "failed"
         assert text == ""
 
     def test_whitespace_only_text_file(self):
-        text, status = extract_text(b"   \n\n  ", ".txt")
+        text, status, *_ = extract_text(b"   \n\n  ", ".txt")
         assert status == "failed"
         assert text == ""
 
     def test_extension_case_insensitive(self):
         content = "test content"
-        text, status = extract_text(content.encode("utf-8"), ".TXT")
+        text, status, *_ = extract_text(content.encode("utf-8"), ".TXT")
         assert status == "complete"
         assert text == content
 
     def test_extension_with_leading_dot(self):
         content = "test content"
-        text, status = extract_text(content.encode("utf-8"), ".txt")
+        text, status, *_ = extract_text(content.encode("utf-8"), ".txt")
         assert status == "complete"
 
     def test_extension_without_leading_dot(self):
         """The service strips leading dots, so 'txt' should also work."""
         content = "test content"
-        text, status = extract_text(content.encode("utf-8"), "txt")
+        text, status, *_ = extract_text(content.encode("utf-8"), "txt")
         assert status == "complete"
 
     @patch("app.services.text_extraction_service._extract_pdf")
     def test_pdf_extraction(self, mock_pdf):
         mock_pdf.return_value = "PDF content here"
-        text, status = extract_text(b"fake pdf data", ".pdf")
+        text, status, *_ = extract_text(b"fake pdf data", ".pdf")
         assert status == "complete"
         assert text == "PDF content here"
         mock_pdf.assert_called_once_with(b"fake pdf data")
@@ -101,20 +101,20 @@ class TestExtractText:
     @patch("app.services.text_extraction_service._extract_pdf")
     def test_pdf_extraction_empty(self, mock_pdf):
         mock_pdf.return_value = ""
-        text, status = extract_text(b"fake pdf data", ".pdf")
+        text, status, *_ = extract_text(b"fake pdf data", ".pdf")
         assert status == "failed"
 
     @patch("app.services.text_extraction_service._extract_pdf")
     def test_pdf_extraction_error(self, mock_pdf):
         mock_pdf.side_effect = Exception("parse error")
-        text, status = extract_text(b"bad data", ".pdf")
+        text, status, *_ = extract_text(b"bad data", ".pdf")
         assert status == "failed"
         assert text == ""
 
     @patch("app.services.text_extraction_service._extract_docx")
     def test_docx_extraction(self, mock_docx):
         mock_docx.return_value = "Word document text"
-        text, status = extract_text(b"fake docx", ".docx")
+        text, status, *_ = extract_text(b"fake docx", ".docx")
         assert status == "complete"
         assert text == "Word document text"
 
@@ -122,13 +122,28 @@ class TestExtractText:
     def test_doc_extraction(self, mock_docx):
         """The .doc extension maps to the docx extractor."""
         mock_docx.return_value = "Doc text"
-        text, status = extract_text(b"fake doc", ".doc")
+        text, status, *_ = extract_text(b"fake doc", ".doc")
+        assert status == "complete"
+
+    @patch("app.services.text_extraction_service._extract_pptx")
+    def test_pptx_extraction(self, mock_pptx):
+        mock_pptx.return_value = "[Slide 1]\nTitle slide text"
+        text, status, *_ = extract_text(b"fake pptx", ".pptx")
+        assert status == "complete"
+        assert "Slide 1" in text
+        mock_pptx.assert_called_once_with(b"fake pptx")
+
+    @patch("app.services.text_extraction_service._extract_pptx")
+    def test_ppt_extraction(self, mock_pptx):
+        """The .ppt extension maps to the pptx extractor."""
+        mock_pptx.return_value = "Presentation text"
+        text, status, *_ = extract_text(b"fake ppt", ".ppt")
         assert status == "complete"
 
     @patch("app.services.text_extraction_service._extract_xlsx")
     def test_xlsx_extraction(self, mock_xlsx):
         mock_xlsx.return_value = "[Sheet: Sheet1]\nA | B\n1 | 2"
-        text, status = extract_text(b"fake xlsx", ".xlsx")
+        text, status, *_ = extract_text(b"fake xlsx", ".xlsx")
         assert status == "complete"
         assert "Sheet1" in text
 
@@ -136,7 +151,7 @@ class TestExtractText:
     def test_xls_extraction(self, mock_xls):
         """The .xls extension maps to the xls extractor."""
         mock_xls.return_value = "Sheet data"
-        text, status = extract_text(b"fake xls", ".xls")
+        text, status, *_ = extract_text(b"fake xls", ".xls")
         assert status == "complete"
         mock_xls.assert_called_once_with(b"fake xls")
 

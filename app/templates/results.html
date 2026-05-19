@@ -317,6 +317,16 @@
                 <span><span id="mongoUnchanged">0</span> unchanged</span>
             </div>
 
+            <!-- Store Error Details -->
+            <div id="mongoErrorSection" class="hidden mb-4">
+                <button
+                    onclick="toggleMongoErrorDetails()"
+                    id="mongoErrorToggle"
+                    class="text-xs text-red-600 hover:text-red-800 hover:underline"
+                >Show error details</button>
+                <div id="mongoErrorDetails" class="hidden mt-2 max-h-36 overflow-y-auto space-y-1 text-xs"></div>
+            </div>
+
             <!-- Summarization Note -->
             <div id="mongoSummarizationNote" class="hidden mb-4 p-3 rounded-lg text-sm">
                 <div class="flex items-center gap-2">
@@ -442,6 +452,14 @@
                         <div id="retrySpinner" class="spinner hidden" style="width: 16px; height: 16px; border-width: 2px;"></div>
                     </button>
                     <p id="retryResult" class="hidden mt-2 text-sm text-center"></p>
+                    <!-- Error detail toggle -->
+                    <button
+                        id="scanErrorDetailBtn"
+                        onclick="toggleScanErrorDetails()"
+                        class="hidden mt-2 text-xs text-red-600 hover:text-red-800 hover:underline"
+                    >Show error details</button>
+                    <div id="scanErrorDetails" class="hidden mt-2 max-h-48 overflow-y-auto space-y-1 text-xs">
+                    </div>
                 </div>
 
                 <!-- Show Additional Info Toggle -->
@@ -635,6 +653,22 @@
                         `Retry ${total} failed item${total !== 1 ? 's' : ''}`;
                 }
                 document.getElementById('retryResult').classList.add('hidden');
+
+                // Build error detail content
+                const errorItems = [];
+                (summary.failed_pages || []).forEach(p => {
+                    errorItems.push(`<div class="bg-red-50 rounded p-2 border border-red-100"><span class="font-medium text-red-800">Page failed:</span> <span class="text-red-600 break-all">${escapeHtml(p.url)}</span></div>`);
+                });
+                (summary.document_errors || []).forEach(d => {
+                    errorItems.push(`<div class="bg-red-50 rounded p-2 border border-red-100"><span class="font-medium text-red-800">${escapeHtml(d.filename)}</span><div class="text-red-600 mt-0.5">${escapeHtml(d.error)}</div></div>`);
+                });
+                (summary.scan_errors || []).forEach(msg => {
+                    errorItems.push(`<div class="bg-red-50 rounded p-2 border border-red-100 text-red-600">${escapeHtml(msg)}</div>`);
+                });
+                if (errorItems.length > 0) {
+                    document.getElementById('scanErrorDetails').innerHTML = errorItems.join('');
+                    document.getElementById('scanErrorDetailBtn').classList.remove('hidden');
+                }
             } else {
                 document.getElementById('summaryErrorsRow').classList.add('hidden');
             }
@@ -1162,34 +1196,42 @@
 
         const extClass = getExtensionClass(doc.extension);
 
+        const safeExt = escapeHtml(doc.extension.replace('.', ''));
+        const safeFilename = escapeHtml(doc.filename);
+        const safeError = escapeHtml(doc.error_message || 'Not accessible');
+        const safeSize = escapeHtml(doc.file_size_display || '-');
+        const safeDepth = escapeHtml(doc.depth);
+
         tr.innerHTML = `
             <td class="px-4 py-3">
                 <input
                     type="checkbox"
                     class="checkbox-custom"
                     ${isSelected ? 'checked' : ''}
-                    onchange="toggleDocument('${doc.url}', this)"
-                    onclick="event.stopPropagation()"
                 >
             </td>
             <td class="px-4 py-3">
                 <span class="px-2 py-0.5 text-xs font-medium ${extClass} rounded uppercase">
-                    ${doc.extension.replace('.', '')}
+                    ${safeExt}
                 </span>
             </td>
             <td class="px-4 py-3">
                 <div class="flex flex-col">
-                    <span class="text-sm font-medium text-gray-800 truncate max-w-md" title="${doc.filename}">${doc.filename}</span>
-                    ${!doc.is_accessible ? `<span class="text-xs text-red-500">${doc.error_message || 'Not accessible'}</span>` : ''}
+                    <span class="text-sm font-medium text-gray-800 truncate max-w-md" title="${safeFilename}">${safeFilename}</span>
+                    ${!doc.is_accessible ? `<span class="text-xs text-red-500">${safeError}</span>` : ''}
                 </div>
             </td>
-            <td class="px-4 py-3 text-sm text-gray-500 hidden sm:table-cell">${doc.file_size_display || '-'}</td>
-            <td class="px-4 py-3 text-sm text-gray-500 hidden md:table-cell">${doc.depth}</td>
+            <td class="px-4 py-3 text-sm text-gray-500 hidden sm:table-cell">${safeSize}</td>
+            <td class="px-4 py-3 text-sm text-gray-500 hidden md:table-cell">${safeDepth}</td>
         `;
+
+        // Wire checkbox handlers programmatically so doc.url never enters JS source.
+        const checkbox = tr.querySelector('input[type="checkbox"]');
+        checkbox.addEventListener('change', () => toggleDocument(doc.url, checkbox));
+        checkbox.addEventListener('click', (e) => e.stopPropagation());
 
         tr.addEventListener('click', (e) => {
             if (e.target.type !== 'checkbox') {
-                const checkbox = tr.querySelector('input[type="checkbox"]');
                 checkbox.checked = !checkbox.checked;
                 toggleDocument(doc.url, checkbox);
             }
@@ -1273,33 +1315,40 @@
 
         const extClass = getExtensionClass(doc.extension);
 
+        const safeExt = escapeHtml(doc.extension.replace('.', ''));
+        const safeFilename = escapeHtml(doc.filename);
+        const safeError = escapeHtml(doc.error_message || 'Not accessible');
+        const safeSize = escapeHtml(doc.file_size_display);
+
         div.innerHTML = `
             <div class="flex items-start gap-3">
                 <input
                     type="checkbox"
                     class="checkbox-custom mt-1"
                     ${isSelected ? 'checked' : ''}
-                    onchange="toggleDocument('${doc.url}', this)"
-                    onclick="event.stopPropagation()"
                 >
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 mb-1">
                         <span class="px-2 py-0.5 text-xs font-medium ${extClass} rounded uppercase">
-                            ${doc.extension.replace('.', '')}
+                            ${safeExt}
                         </span>
-                        ${doc.file_size_display ? `<span class="text-xs text-gray-500">${doc.file_size_display}</span>` : ''}
+                        ${doc.file_size_display ? `<span class="text-xs text-gray-500">${safeSize}</span>` : ''}
                     </div>
-                    <h3 class="text-sm font-medium text-gray-800 truncate" title="${doc.filename}">
-                        ${doc.filename}
+                    <h3 class="text-sm font-medium text-gray-800 truncate" title="${safeFilename}">
+                        ${safeFilename}
                     </h3>
-                    ${!doc.is_accessible ? `<p class="text-xs text-red-500 mt-1">${doc.error_message || 'Not accessible'}</p>` : ''}
+                    ${!doc.is_accessible ? `<p class="text-xs text-red-500 mt-1">${safeError}</p>` : ''}
                 </div>
             </div>
         `;
 
+        // Wire checkbox handlers programmatically so doc.url never enters JS source.
+        const checkbox = div.querySelector('input[type="checkbox"]');
+        checkbox.addEventListener('change', () => toggleDocument(doc.url, checkbox));
+        checkbox.addEventListener('click', (e) => e.stopPropagation());
+
         div.addEventListener('click', (e) => {
             if (e.target.type !== 'checkbox') {
-                const checkbox = div.querySelector('input[type="checkbox"]');
                 checkbox.checked = !checkbox.checked;
                 toggleDocument(doc.url, checkbox);
             }
@@ -1448,6 +1497,32 @@
 
         // Re-validate path (disk space may have changed with selection)
         debouncedValidatePath();
+    }
+
+    // Safe for both text and attribute contexts: also escapes " and ' so the result
+    // can be interpolated into attribute values without breaking out.
+    function escapeHtml(text) {
+        if (text === null || text === undefined) return '';
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function toggleMongoErrorDetails() {
+        const panel = document.getElementById('mongoErrorDetails');
+        const btn = document.getElementById('mongoErrorToggle');
+        const hidden = panel.classList.toggle('hidden');
+        btn.textContent = hidden ? 'Show error details' : 'Hide error details';
+    }
+
+    function toggleScanErrorDetails() {
+        const panel = document.getElementById('scanErrorDetails');
+        const btn = document.getElementById('scanErrorDetailBtn');
+        const hidden = panel.classList.toggle('hidden');
+        btn.textContent = hidden ? 'Show error details' : 'Hide error details';
     }
 
     function formatFileSize(bytes) {
@@ -1734,6 +1809,8 @@
             document.getElementById('mongoFailed').textContent = '0';
             document.getElementById('mongoOverlayBtn').textContent = 'Cancel';
             document.getElementById('mongoSummarizationNote').classList.add('hidden');
+            document.getElementById('mongoErrorSection').classList.add('hidden');
+            document.getElementById('mongoErrorDetails').classList.add('hidden');
             document.getElementById('mongoNew').textContent = '0';
             document.getElementById('mongoUpdated').textContent = '0';
             document.getElementById('mongoUnchanged').textContent = '0';
@@ -1770,6 +1847,15 @@
                 dlBtn.disabled = true;
                 document.getElementById('downloadBtnText').textContent = 'Stored';
                 dlBtn.className = dlBtn.className.replace('bg-blue-600 hover:bg-blue-700', 'bg-gray-400 cursor-not-allowed');
+
+                // Show error details if any files failed
+                const errors = data.file_errors || [];
+                if (errors.length > 0) {
+                    document.getElementById('mongoErrorSection').classList.remove('hidden');
+                    document.getElementById('mongoErrorDetails').innerHTML = errors.map(e =>
+                        `<div class="bg-red-50 rounded p-2 border border-red-100"><span class="font-medium text-red-800">${escapeHtml(e.filename)}</span><div class="text-red-600 mt-0.5">${escapeHtml(e.error)}</div></div>`
+                    ).join('');
+                }
 
                 if (data.summarization_started) {
                     showSummarizationRunning();

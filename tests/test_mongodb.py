@@ -518,7 +518,7 @@ class TestDocumentSearchEndpoints:
         mock_search.return_value = []
         resp = client.get("/api/download/mongodb/search?limit=999")
         assert resp.status_code == 200
-        mock_search.assert_called_once_with(query="", scan_url=None, extension=None, limit=200)
+        mock_search.assert_called_once_with(query="", scan_url=None, extension=None, limit=999)
 
     @patch.object(mongodb_service, "search_documents")
     def test_search_error(self, mock_search, client):

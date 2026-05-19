@@ -136,6 +136,7 @@ def store_document(
     extracted_text: Optional[str] = None,
     text_extraction_status: str = "pending",
     text_extraction_method: Optional[str] = None,
+    text_extraction_error: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
     Store a document in MongoDB using GridFS.
@@ -197,6 +198,7 @@ def store_document(
             "extracted_text": extracted_text,
             "text_extraction_status": text_extraction_status,
             "text_extraction_method": text_extraction_method,
+            "text_extraction_error": text_extraction_error,
             "content_hash": content_hash,
             "version": version,
             "version_label": f"v{version}",
@@ -390,13 +392,17 @@ def update_summary(
     return result.modified_count > 0
 
 
-def retry_text_extraction() -> Dict[str, int]:
+def retry_text_extraction(progress_callback=None) -> Dict[str, int]:
     """Re-attempt text extraction for documents where it previously failed.
 
     First tries the standard extractor (handles newly added formats like .xls).
     For PDFs that still fail, attempts Stirling PDF (fast text extract, then OCR).
     Returns a dict with counts: total, succeeded, stirling_fast, stirling_ocr, failed.
+
+    Args:
+        progress_callback: Optional callable(current, total, filename) called after each doc.
     """
+    import time
     import gridfs
     from app.services.text_extraction_service import extract_text
 
@@ -409,7 +415,7 @@ def retry_text_extraction() -> Dict[str, int]:
             "summary_status": {"$in": ["pending", "failed"]},
             "text_extraction_status": {"$in": ["failed", "unsupported"]},
         },
-        {"_id": 1, "filename": 1, "extension": 1, "gridfs_id": 1},
+        {"_id": 1, "filename": 1, "extension": 1, "gridfs_id": 1, "file_size_bytes": 1},
     ))
 
     stats = {"total": len(docs), "succeeded": 0, "stirling_fast": 0, "stirling_ocr": 0, "failed": 0}
@@ -435,30 +441,63 @@ def retry_text_extraction() -> Dict[str, int]:
         f"{' — Stirling PDF available for OCR' if stirling_available else ''}"
     )
 
+    # Pre-compute remaining bytes for ETA estimation
+    doc_sizes = [d.get("file_size_bytes") or 0 for d in docs]
+    total_bytes = sum(doc_sizes)
+    bytes_processed = 0
+    start_time = time.monotonic()
+
+    def _report_progress(i, filename, file_size, method_label):
+        """Send rich progress info through the callback."""
+        if not progress_callback:
+            return
+        elapsed = time.monotonic() - start_time
+        remaining_bytes = total_bytes - bytes_processed
+        bytes_per_sec = bytes_processed / elapsed if elapsed > 1 else 0
+        eta_seconds = remaining_bytes / bytes_per_sec if bytes_per_sec > 0 else 0
+        progress_callback({
+            "current": i + 1,
+            "total": stats["total"],
+            "current_file": filename,
+            "current_file_size": file_size,
+            "method": method_label,
+            "elapsed_seconds": round(elapsed),
+            "bytes_processed": bytes_processed,
+            "bytes_remaining": remaining_bytes,
+            "bytes_per_second": round(bytes_per_sec),
+            "eta_seconds": round(eta_seconds),
+        })
+
     for i, doc in enumerate(docs):
         filename = doc["filename"]
         ext = doc["extension"].lower()
+        file_size = doc_sizes[i]
+
+        _report_progress(i, filename, file_size, "starting")
 
         try:
             grid_out = fs.get(doc["gridfs_id"])
             file_data = grid_out.read()
         except Exception:
             stats["failed"] += 1
+            bytes_processed += file_size
             continue
 
         # Try standard extraction first
         method = None
+        extraction_error = ""
         try:
-            text, status = extract_text(file_data, ext)
+            text, status, extraction_error = extract_text(file_data, ext)
             if status == "complete":
                 method = "pypdf2" if ext == ".pdf" else "standard"
         except Exception as e:
             logger.warning(f"Standard extraction error for {filename}: {e}")
-            text, status = "", "failed"
+            text, status, extraction_error = "", "failed", str(e)
 
         # If standard extraction failed for PDFs, try Stirling PDF
         if status != "complete" and ext == ".pdf" and stirling_available:
             # Fast path first: direct text extraction (~1 second)
+            _report_progress(i, filename, file_size, "stirling_fast")
             fast_text = stirling_pdf_service.extract_text_direct(file_data)
             if fast_text:
                 text = fast_text
@@ -468,6 +507,7 @@ def retry_text_extraction() -> Dict[str, int]:
                 logger.info(f"[{i+1}/{stats['total']}] Stirling fast extract: {filename}")
             else:
                 # Slow path: OCR (1-5 minutes per file)
+                _report_progress(i, filename, file_size, "stirling_ocr")
                 remaining_ocr = sum(
                     1 for d in docs[i:]
                     if d["extension"].lower() == ".pdf"
@@ -483,6 +523,8 @@ def retry_text_extraction() -> Dict[str, int]:
                     method = "stirling_ocr"
                     stats["stirling_ocr"] += 1
 
+        bytes_processed += file_size
+
         if status == "complete" and text and text.strip():
             col.update_one(
                 {"_id": doc["_id"]},
@@ -490,6 +532,7 @@ def retry_text_extraction() -> Dict[str, int]:
                     "extracted_text": text.strip(),
                     "text_extraction_status": "complete",
                     "text_extraction_method": method,
+                    "text_extraction_error": None,
                     "summary_status": "pending",
                     "summary_error": None,
                 }},
@@ -497,6 +540,10 @@ def retry_text_extraction() -> Dict[str, int]:
             stats["succeeded"] += 1
             logger.info(f"[{i+1}/{stats['total']}] Re-extracted text for: {filename}")
         else:
+            col.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {"text_extraction_error": extraction_error or "Extraction failed"}},
+            )
             stats["failed"] += 1
 
     logger.info(

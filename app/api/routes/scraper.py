@@ -281,6 +281,16 @@ async def get_scan_summary(session_id: str):
             (result and any(not d.is_accessible for d in result.documents)) or
             (session.get("crawl_state") and session["crawl_state"].failed_pages)
         ),
+        "scan_errors": (result.errors[:50] if result else []),
+        "failed_pages": [
+            {"url": url, "depth": depth}
+            for url, depth in (session.get("crawl_state").failed_pages if session.get("crawl_state") else [])
+        ][:50],
+        "document_errors": [
+            {"filename": d.filename, "url": d.url, "error": d.error_message or "Not accessible"}
+            for d in (result.documents if result else [])
+            if not d.is_accessible
+        ][:50],
     }
 
 

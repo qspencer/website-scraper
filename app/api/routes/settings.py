@@ -1,5 +1,6 @@
 """API routes for application settings."""
 
+import re
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 
@@ -7,6 +8,11 @@ from fastapi import APIRouter
 
 from app.core.logging_config import get_logger
 from app.services.settings_service import runtime_settings
+
+# Matches a MongoDB URI containing a userinfo segment (user[:password]@host…).
+# Group 1 = scheme prefix incl. "://", group 2 = host-and-rest.
+_MONGO_URI_USERINFO_RE = re.compile(r"^(mongodb(?:\+srv)?://)[^@/]+@(.+)$")
+_MONGO_URI_MASK = "****:****@"
 
 logger = get_logger(__name__)
 
@@ -49,11 +55,26 @@ class SettingsResponse(BaseModel):
     stirling_pdf_url: str
 
 
+def _mask_mongodb_uri(uri: str) -> str:
+    """Mask the userinfo (user:password) in a MongoDB URI, if present.
+
+    Returns the URI unchanged when there's no userinfo (e.g. mongodb://localhost:27017).
+    """
+    if not uri:
+        return uri
+    m = _MONGO_URI_USERINFO_RE.match(uri)
+    if not m:
+        return uri
+    return f"{m.group(1)}{_MONGO_URI_MASK}{m.group(2)}"
+
+
 def _masked_settings() -> dict:
-    """Return settings with the API key masked for client responses."""
+    """Return settings with credentials masked for client responses."""
     all_settings = runtime_settings.get_all()
     if all_settings.get("ai_api_key"):
         all_settings["ai_api_key"] = "********"
+    if all_settings.get("mongodb_uri"):
+        all_settings["mongodb_uri"] = _mask_mongodb_uri(all_settings["mongodb_uri"])
     return all_settings
 
 
@@ -82,6 +103,10 @@ async def update_settings(updates: SettingsUpdate):
     # Ignore masked API key placeholder — means user didn't change it
     if update_dict.get("ai_api_key") == "********":
         del update_dict["ai_api_key"]
+
+    # Ignore masked mongodb_uri (contains the userinfo mask we put there) — user didn't change it.
+    if "mongodb_uri" in update_dict and _MONGO_URI_MASK in update_dict["mongodb_uri"]:
+        del update_dict["mongodb_uri"]
 
     if update_dict:
         logger.info(f"Updating settings: {list(update_dict.keys())}")

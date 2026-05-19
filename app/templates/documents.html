@@ -125,6 +125,28 @@
     <!-- Results list -->
     <div id="resultsList" class="space-y-4"></div>
 
+    <!-- Pagination -->
+    <div id="pagination" class="hidden mt-4 px-4 py-3 bg-white rounded-lg shadow-sm border border-gray-200 flex items-center justify-between">
+        <div class="text-sm text-gray-500">
+            Showing <span id="pageStart">1</span>-<span id="pageEnd">50</span> of <span id="totalDocs">0</span> documents
+        </div>
+        <div class="flex items-center gap-2">
+            <button onclick="firstPage()" id="firstPageBtn" disabled class="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed" title="First page">
+                &laquo;
+            </button>
+            <button onclick="prevPage()" id="prevPageBtn" disabled class="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed">
+                Previous
+            </button>
+            <span class="text-sm text-gray-600">Page <span id="currentPage">1</span> of <span id="totalPages">1</span></span>
+            <button onclick="nextPage()" id="nextPageBtn" class="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed">
+                Next
+            </button>
+            <button onclick="lastPage()" id="lastPageBtn" disabled class="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed" title="Last page">
+                &raquo;
+            </button>
+        </div>
+    </div>
+
     <!-- Document detail modal -->
     <div id="detailModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
         <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
@@ -142,8 +164,18 @@
 <script>
     let selectedScanUrl = '';
     let summaryPollTimer = null;
+    let resultsPerPage = 50;  // default, overridden by settings
+    let allResults = [];      // all search results
+    let currentPage = 1;
 
-    document.addEventListener('DOMContentLoaded', loadScans);
+    document.addEventListener('DOMContentLoaded', async () => {
+        try {
+            const resp = await fetch('/api/settings');
+            const settings = await resp.json();
+            if (settings.results_per_page) resultsPerPage = settings.results_per_page;
+        } catch (e) {}
+        loadScans();
+    });
 
     async function loadScans() {
         try {
@@ -185,9 +217,12 @@
         }
 
         // Reset state
+        allResults = [];
+        currentPage = 1;
         document.getElementById('resultsList').innerHTML = '';
         document.getElementById('statsBar').classList.add('hidden');
         document.getElementById('noResults').classList.add('hidden');
+        document.getElementById('pagination').classList.add('hidden');
         document.getElementById('searchQuery').value = '';
         document.getElementById('summarizationBar').classList.add('hidden');
 
@@ -206,15 +241,19 @@
         if (!selectedScanUrl) return;
 
         try {
-            const resp = await fetch(`/api/download/mongodb/scan/summary-stats?scan_url=${encodeURIComponent(selectedScanUrl)}`);
-            const stats = await resp.json();
-            updateSummarizationBar(stats);
+            const [scanResp, globalResp] = await Promise.all([
+                fetch(`/api/download/mongodb/scan/summary-stats?scan_url=${encodeURIComponent(selectedScanUrl)}`),
+                fetch('/api/download/mongodb/summarization/status'),
+            ]);
+            const stats = await scanResp.json();
+            const globalData = await globalResp.json();
+            updateSummarizationBar(stats, globalData.ai_configured, globalData.is_running);
         } catch (e) {
             console.error('Failed to load summary stats:', e);
         }
     }
 
-    function updateSummarizationBar(stats) {
+    function updateSummarizationBar(stats, aiConfigured, isRunning) {
         const bar = document.getElementById('summarizationBar');
         const statsText = document.getElementById('summaryStatsText');
         const btn = document.getElementById('summarizeBtn');
@@ -248,6 +287,23 @@
 
         statsText.innerHTML = parts.join(', ');
 
+        // If AI is not configured, hide action buttons entirely
+        if (!aiConfigured) {
+            btn.classList.add('hidden');
+            retryBtn.classList.add('hidden');
+            spinner.classList.add('hidden');
+            return;
+        }
+
+        // If summarization is already running, show spinner and hide buttons
+        if (isRunning) {
+            btn.classList.add('hidden');
+            retryBtn.classList.add('hidden');
+            spinner.classList.remove('hidden');
+            startSummaryPolling();
+            return;
+        }
+
         // Show retry button when there are failures and nothing is pending
         if (stats.failed > 0 && stats.pending === 0) {
             retryBtn.classList.remove('hidden');
@@ -256,31 +312,23 @@
             retryBtn.classList.add('hidden');
         }
 
+        spinner.classList.add('hidden');
+
         // Determine main button state
-        if (stats.complete === 0 && stats.failed === 0) {
-            // No summaries exist yet
+        if (stats.pending > 0) {
+            // Documents waiting — offer to start/continue
             btn.textContent = 'Create Summaries';
             btn.className = 'px-4 py-1.5 text-sm font-medium rounded-lg transition bg-blue-600 text-white hover:bg-blue-700';
             btn.onclick = () => startSummarization(false);
             btn.disabled = false;
             btn.classList.remove('hidden');
-            spinner.classList.add('hidden');
-        } else if (stats.pending === 0 && stats.failed === 0) {
+        } else if (stats.complete > 0 && stats.failed === 0) {
             // All done — offer recreate
             btn.textContent = 'Recreate Summaries';
             btn.className = 'px-4 py-1.5 text-sm font-medium rounded-lg transition border border-gray-300 text-gray-700 hover:bg-gray-100';
             btn.onclick = () => startSummarization(true);
             btn.disabled = false;
             btn.classList.remove('hidden');
-            spinner.classList.add('hidden');
-        } else if (stats.pending > 0) {
-            // Some pending — offer to continue
-            btn.textContent = 'Create Summaries';
-            btn.className = 'px-4 py-1.5 text-sm font-medium rounded-lg transition bg-blue-600 text-white hover:bg-blue-700';
-            btn.onclick = () => startSummarization(false);
-            btn.disabled = false;
-            btn.classList.remove('hidden');
-            spinner.classList.add('hidden');
         } else if (stats.failed > 0) {
             // Only failures remain — main button offers recreate
             btn.textContent = 'Recreate Summaries';
@@ -288,10 +336,8 @@
             btn.onclick = () => startSummarization(true);
             btn.disabled = false;
             btn.classList.remove('hidden');
-            spinner.classList.add('hidden');
         } else {
             btn.classList.add('hidden');
-            spinner.classList.add('hidden');
         }
     }
 
@@ -341,6 +387,7 @@
 
     let pollStartTime = null;
     let pollStartComplete = 0;
+    let pollLastRefreshComplete = 0;
 
     function startSummaryPolling() {
         if (summaryPollTimer) clearInterval(summaryPollTimer);
@@ -350,7 +397,7 @@
         // Get initial baseline
         fetch(`/api/download/mongodb/scan/summary-stats?scan_url=${encodeURIComponent(selectedScanUrl)}`)
             .then(r => r.json())
-            .then(s => { pollStartComplete = s.complete || 0; })
+            .then(s => { pollStartComplete = s.complete || 0; pollLastRefreshComplete = s.complete || 0; })
             .catch(() => {});
 
         let pollBusy = false;
@@ -374,34 +421,74 @@
                     await loadSummaryStats();
                     performSearch();
                 } else {
-                    const done = scanStats.complete + scanStats.failed;
-                    const total = done + scanStats.pending;
-                    const newlyDone = scanStats.complete - pollStartComplete;
+                    // Refresh document list so summaries appear as they complete
+                    if (scanStats.complete > pollLastRefreshComplete) {
+                        pollLastRefreshComplete = scanStats.complete;
+                        performSearch();
+                    }
 
-                    let msg = `Processing... ${done} of ${total} done`;
+                    const progress = globalData.progress || {};
+                    let msg = '';
 
-                    // Calculate rate and ETA
-                    if (pollStartTime && newlyDone > 2) {
-                        const elapsed = (Date.now() - pollStartTime) / 1000;
-                        const rate = newlyDone / elapsed; // docs per second
-                        const remaining = scanStats.pending;
-                        if (rate > 0 && remaining > 0) {
-                            const etaSec = remaining / rate;
-                            if (etaSec < 60) {
-                                msg += ` (~${Math.round(etaSec)}s remaining)`;
-                            } else if (etaSec < 3600) {
-                                msg += ` (~${Math.round(etaSec / 60)} min remaining)`;
-                            } else {
-                                msg += ` (~${(etaSec / 3600).toFixed(1)} hr remaining)`;
+                    if (progress.phase === 'extracting') {
+                        const cur = progress.current || 0;
+                        const tot = progress.total || '?';
+                        const elapsed = progress.elapsed_seconds || 0;
+                        const eta = progress.eta_seconds || 0;
+                        const bps = progress.bytes_per_second || 0;
+                        const method = progress.method || '';
+                        const fileSize = progress.current_file_size || 0;
+
+                        // File info
+                        let shortName = progress.current_file || '';
+                        if (shortName.length > 35) shortName = shortName.substring(0, 32) + '...';
+
+                        let fileSizeStr = '';
+                        if (fileSize > 0) fileSizeStr = ` (${formatFileSize(fileSize)})`;
+
+                        // Method label
+                        let methodLabel = '';
+                        if (method === 'stirling_ocr') methodLabel = ' <span class="text-amber-600 font-medium">OCR</span>';
+                        else if (method === 'stirling_fast') methodLabel = ' <span class="text-blue-600 font-medium">Stirling</span>';
+
+                        msg = `Extracting text: ${cur} of ${tot}`;
+                        if (shortName) msg += ` — ${escapeHtml(shortName)}${fileSizeStr}`;
+                        if (methodLabel) msg += methodLabel;
+
+                        // Timing line
+                        let timingParts = [];
+                        if (elapsed > 0) timingParts.push(`elapsed: ${formatDuration(elapsed)}`);
+                        if (bps > 0) timingParts.push(`${formatFileSize(bps)}/s`);
+                        if (eta > 5 && elapsed > 10) timingParts.push(`~${formatDuration(eta)} remaining`);
+                        if (timingParts.length > 0) {
+                            msg += ` <span class="text-gray-400 text-xs">${timingParts.join(' · ')}</span>`;
+                        }
+                    } else {
+                        const done = scanStats.complete + scanStats.failed;
+                        const total = done + scanStats.pending;
+                        const newlyDone = scanStats.complete - pollStartComplete;
+
+                        msg = `Summarizing... ${done} of ${total} done`;
+
+                        // Calculate rate and ETA
+                        if (pollStartTime && newlyDone > 2) {
+                            const elapsed = (Date.now() - pollStartTime) / 1000;
+                            const rate = newlyDone / elapsed; // docs per second
+                            const remaining = scanStats.pending;
+                            if (rate > 0 && remaining > 0) {
+                                const etaSec = remaining / rate;
+                                if (etaSec < 60) {
+                                    msg += ` (~${Math.round(etaSec)}s remaining)`;
+                                } else if (etaSec < 3600) {
+                                    msg += ` (~${Math.round(etaSec / 60)} min remaining)`;
+                                } else {
+                                    msg += ` (~${(etaSec / 3600).toFixed(1)} hr remaining)`;
+                                }
                             }
                         }
                     }
 
-                    if (scanStats.pending === 0 && total > 0) {
-                        msg = `Finishing up... (${scanStats.complete} summarized, ${scanStats.failed} failed)`;
-                    }
-
-                    statsText.textContent = msg;
+                    statsText.innerHTML = msg;
                 }
             } catch (e) {}
             pollBusy = false;
@@ -438,13 +525,15 @@
         document.getElementById('connectionError').classList.add('hidden');
         document.getElementById('resultsList').innerHTML = '';
         document.getElementById('statsBar').classList.add('hidden');
+        document.getElementById('pagination').classList.add('hidden');
 
         try {
             const params = new URLSearchParams();
             if (query) params.set('q', query);
             params.set('scan_url', selectedScanUrl);
             if (extension) params.set('extension', extension);
-            params.set('limit', '100');
+            // Fetch all results for client-side pagination
+            params.set('limit', '0');
 
             const resp = await fetch(`/api/download/mongodb/search?${params}`);
             if (!resp.ok) {
@@ -471,17 +560,84 @@
                 return;
             }
 
+            allResults = results;
+            currentPage = 1;
+
             document.getElementById('statsBar').classList.remove('hidden');
             document.getElementById('resultCount').textContent =
                 `${results.length} document${results.length !== 1 ? 's' : ''} found`;
 
-            renderResults(results);
+            renderPage();
 
         } catch (e) {
             document.getElementById('loadingSpinner').classList.add('hidden');
             console.error('Search error:', e);
             document.getElementById('connectionError').classList.remove('hidden');
             document.getElementById('connectionErrorMsg').textContent = e.message;
+        }
+    }
+
+    function renderPage() {
+        const itemsPerPage = resultsPerPage > 0 ? resultsPerPage : allResults.length;
+        const totalPages = Math.max(1, Math.ceil(allResults.length / itemsPerPage));
+        const start = (currentPage - 1) * itemsPerPage;
+        const end = Math.min(start + itemsPerPage, allResults.length);
+        const pageResults = allResults.slice(start, end);
+
+        renderResults(pageResults);
+
+        // Update pagination UI
+        const pag = document.getElementById('pagination');
+        if (totalPages <= 1) {
+            pag.classList.add('hidden');
+        } else {
+            pag.classList.remove('hidden');
+            document.getElementById('pageStart').textContent = start + 1;
+            document.getElementById('pageEnd').textContent = end;
+            document.getElementById('totalDocs').textContent = allResults.length;
+            document.getElementById('currentPage').textContent = currentPage;
+            document.getElementById('totalPages').textContent = totalPages;
+
+            document.getElementById('firstPageBtn').disabled = currentPage <= 1;
+            document.getElementById('prevPageBtn').disabled = currentPage <= 1;
+            document.getElementById('nextPageBtn').disabled = currentPage >= totalPages;
+            document.getElementById('lastPageBtn').disabled = currentPage >= totalPages;
+        }
+    }
+
+    function prevPage() {
+        if (currentPage > 1) {
+            currentPage--;
+            renderPage();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+    }
+
+    function nextPage() {
+        const itemsPerPage = resultsPerPage > 0 ? resultsPerPage : allResults.length;
+        const totalPages = Math.ceil(allResults.length / itemsPerPage);
+        if (currentPage < totalPages) {
+            currentPage++;
+            renderPage();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+    }
+
+    function firstPage() {
+        if (currentPage > 1) {
+            currentPage = 1;
+            renderPage();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+    }
+
+    function lastPage() {
+        const itemsPerPage = resultsPerPage > 0 ? resultsPerPage : allResults.length;
+        const totalPages = Math.ceil(allResults.length / itemsPerPage);
+        if (currentPage < totalPages) {
+            currentPage = totalPages;
+            renderPage();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
         }
     }
 
@@ -591,6 +747,7 @@
                         ${docType ? `<div><span class="text-gray-500">Content Type:</span> <span class="font-medium capitalize">${escapeHtml(docType)}</span></div>` : ''}
                         <div class="col-span-2"><span class="text-gray-500">Source:</span> <a href="${escapeHtml(doc.source_url)}" target="_blank" class="text-blue-600 hover:underline break-all text-xs">${escapeHtml(doc.source_url)}</a></div>
                         ${doc.text_extraction_method ? `<div><span class="text-gray-500">Text Extraction:</span> <span class="font-medium">${escapeHtml(formatExtractionMethod(doc.text_extraction_method))}</span></div>` : ''}
+                        ${doc.text_extraction_error ? `<div class="col-span-2"><span class="text-gray-500">Extraction Error:</span> <span class="text-red-600 text-xs">${escapeHtml(doc.text_extraction_error)}</span></div>` : ''}
                         ${contentHash ? `<div class="col-span-2"><span class="text-gray-500">Content Hash:</span> <span class="font-mono text-xs text-gray-500">${escapeHtml(contentHash.substring(0, 16))}...</span></div>` : ''}
                     </div>
             `;
@@ -791,6 +948,12 @@
         const units = ['B', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(1024));
         return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+    }
+
+    function formatDuration(seconds) {
+        if (seconds < 60) return `${Math.round(seconds)}s`;
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+        return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
     }
 
     function formatExtractionMethod(method) {
