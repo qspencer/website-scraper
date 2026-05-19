@@ -16,6 +16,26 @@ _db_module.init_database()
 from app.main import app
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _close_mongo_client_on_teardown():
+    """Close the module-level pymongo client before pytest tears down logging.
+
+    Without this, the pymongo SDAM monitor thread keeps polling after the test
+    session ends and tries to emit debug records into a closed log handler,
+    producing the noisy 'ValueError: I/O operation on closed file' traceback
+    that previously appeared after every run.
+    """
+    yield
+    try:
+        from app.services import mongodb_service
+        client = getattr(mongodb_service, "_client", None)
+        if client is not None:
+            client.close()
+            mongodb_service._client = None
+    except Exception:
+        pass
+
+
 @pytest.fixture
 def client():
     """Create a test client for the FastAPI app."""
