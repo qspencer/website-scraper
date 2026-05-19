@@ -1,6 +1,29 @@
 #!/usr/bin/env bash
 set -e
 
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [--skip-tests] [-h|--help]
+
+Bootstraps the venv, optionally runs the test suite as a launch gate, ensures the
+Stirling-PDF container is up, kills any prior uvicorn started by this script, and
+starts the app on http://127.0.0.1:8000.
+
+Options:
+  --skip-tests   Skip the pytest gate (useful for tight dev loops).
+  -h, --help     Show this message.
+EOF
+}
+
+SKIP_TESTS=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --skip-tests) SKIP_TESTS=1; shift ;;
+        -h|--help)    usage; exit 0 ;;
+        *)            echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_DIR="$PROJECT_DIR/venv"
@@ -14,8 +37,22 @@ STIRLING_NAME="stirling-pdf"
 STIRLING_PORT=8080
 STIRLING_CPUS=2
 STIRLING_MEMORY="2g"
+# Cold start of the fat image can exceed 60s on first run — give it 180s before warning.
+STIRLING_READY_ITERATIONS=90
+STIRLING_READY_INTERVAL=2
 
 cd "$PROJECT_DIR"
+
+# Catch Ctrl-C / unexpected exit between steps so the user knows the script didn't finish cleanly.
+# Any container or process this script may have started is left as-is; rerun the script to recover.
+on_interrupt() {
+    echo "" >&2
+    echo "Interrupted. Script did not complete." >&2
+    echo "If a Stirling-PDF container was just created, it is still running (docker ps)." >&2
+    echo "Rerun $(basename "$0") to resume; PID file (if any) is left for next-run cleanup." >&2
+    exit 130
+}
+trap on_interrupt INT TERM
 
 # --- Helper functions ---
 
@@ -62,20 +99,37 @@ ensure_stirling_pdf() {
         return
     fi
 
-    # Check if container exists
     if docker inspect "$STIRLING_NAME" &>/dev/null; then
-        # Container exists — start it if stopped
-        if [ "$(docker inspect -f '{{.State.Running}}' "$STIRLING_NAME")" != "true" ]; then
-            echo "Starting Stirling PDF container..."
-            docker start "$STIRLING_NAME" >/dev/null
+        # If the existing container's image no longer matches $STIRLING_IMAGE (e.g. tag was
+        # bumped in this file), recreate so the user gets the version they asked for.
+        local CURRENT_IMAGE
+        CURRENT_IMAGE=$(docker inspect -f '{{.Config.Image}}' "$STIRLING_NAME" 2>/dev/null || true)
+        if [ -n "$CURRENT_IMAGE" ] && [ "$CURRENT_IMAGE" != "$STIRLING_IMAGE" ]; then
+            echo "Stirling PDF image changed ($CURRENT_IMAGE -> $STIRLING_IMAGE); recreating container..."
+            docker rm -f "$STIRLING_NAME" >/dev/null
         else
-            echo "Stirling PDF already running."
+            # Apply --restart unless-stopped retroactively to containers created before this flag was added.
+            local RESTART_POLICY
+            RESTART_POLICY=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$STIRLING_NAME" 2>/dev/null || true)
+            if [ "$RESTART_POLICY" != "unless-stopped" ]; then
+                docker update --restart unless-stopped "$STIRLING_NAME" >/dev/null
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' "$STIRLING_NAME")" != "true" ]; then
+                echo "Starting Stirling PDF container..."
+                docker start "$STIRLING_NAME" >/dev/null
+            else
+                echo "Stirling PDF already running."
+            fi
         fi
-    else
-        # Container doesn't exist — create and start it
+    fi
+
+    if ! docker inspect "$STIRLING_NAME" &>/dev/null; then
         echo "Creating Stirling PDF container..."
+        # --restart unless-stopped keeps the container up across host reboots; user can still
+        # docker stop it explicitly when they want it down.
         docker run -d \
             --name "$STIRLING_NAME" \
+            --restart unless-stopped \
             --cpus "$STIRLING_CPUS" \
             --memory "$STIRLING_MEMORY" \
             --memory-swap "$STIRLING_MEMORY" \
@@ -84,21 +138,21 @@ ensure_stirling_pdf() {
             "$STIRLING_IMAGE"
     fi
 
-    # Wait for Stirling to be ready
     if curl -sf "http://localhost:$STIRLING_PORT/api/v1/info/status" >/dev/null 2>&1; then
         echo "Stirling PDF is ready."
         return
     fi
-    echo -n "Waiting for Stirling PDF to be ready..."
-    for i in $(seq 1 30); do
+    local READY_SECONDS=$((STIRLING_READY_ITERATIONS * STIRLING_READY_INTERVAL))
+    echo -n "Waiting for Stirling PDF to be ready (up to ${READY_SECONDS}s)..."
+    for i in $(seq 1 "$STIRLING_READY_ITERATIONS"); do
         if curl -sf "http://localhost:$STIRLING_PORT/api/v1/info/status" >/dev/null 2>&1; then
             echo " ready."
             return
         fi
         echo -n "."
-        sleep 2
+        sleep "$STIRLING_READY_INTERVAL"
     done
-    echo " WARNING: Stirling PDF did not become ready within 60s (OCR may not work)."
+    echo " WARNING: Stirling PDF did not become ready within ${READY_SECONDS}s (OCR may not work)."
 }
 
 # --- Create virtual environment if needed ---
@@ -113,20 +167,33 @@ fi
 source "$VENV_DIR/bin/activate"
 
 # --- Install dependencies ---
+# Skip when requirements.txt hasn't been touched since the venv was created — common in the
+# dev loop, and pip's no-op resolve still costs ~5s. Use --force-install to bypass.
 
-echo "Installing dependencies..."
-pip install -q -r requirements.txt
-
-# --- Run tests ---
-
-echo "Running tests..."
-if python -m pytest --tb=short -q; then
-    echo ""
-    echo "All tests passed."
+VENV_MARKER="$VENV_DIR/pyvenv.cfg"
+REQS_FILE="$PROJECT_DIR/requirements.txt"
+if [ -f "$VENV_MARKER" ] && [ "$REQS_FILE" -ot "$VENV_MARKER" ]; then
+    echo "Dependencies up to date (requirements.txt older than venv)."
 else
-    echo ""
-    echo "Tests failed. Fix the errors above before running the app."
-    exit 1
+    echo "Installing dependencies..."
+    pip install -q -r "$REQS_FILE"
+    touch "$VENV_MARKER"
+fi
+
+# --- Run tests (skip with --skip-tests) ---
+
+if [ "$SKIP_TESTS" -eq 1 ]; then
+    echo "Skipping tests (--skip-tests)."
+else
+    echo "Running tests..."
+    if python -m pytest --tb=short -q; then
+        echo ""
+        echo "All tests passed."
+    else
+        echo ""
+        echo "Tests failed. Fix the errors above (or rerun with --skip-tests to bypass)."
+        exit 1
+    fi
 fi
 
 # --- Ensure Stirling PDF is running ---
