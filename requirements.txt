@@ -1,27 +1,37 @@
+# Direct dependencies. Floors raised 2026-05-19 to close CVEs identified by pip-audit
+# (see EVALUATION_2026-05-19.md F1.6). Upper-bound pinning + lockfile is a follow-up.
+
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
-aiohttp>=3.9.0
+aiohttp>=3.13.4              # CVE-2026-34513..34520, 34525, 22815, 34514
 beautifulsoup4>=4.12.0
-lxml>=5.1.0
+lxml>=6.1.0                  # CVE-2026-41066
 sse-starlette>=2.0.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
 aiofiles>=23.2.0
-python-multipart>=0.0.6
+python-multipart>=0.0.27     # CVE-2026-40347, 42561
 jinja2>=3.1.0
 httpx>=0.27.0
 playwright>=1.40.0
 
+# Transitives pinned to CVE-fix floors (would normally live in a lockfile).
+idna>=3.15                   # CVE-2026-45409
+urllib3>=2.7.0               # CVE-2026-44431, 44432
+pygments>=2.20.0             # CVE-2026-4539
+python-dotenv>=1.2.2         # CVE-2026-28684
+
 # MongoDB and document processing
 pymongo>=4.6.0
 PyPDF2>=3.0.0
-pycryptodome>=3.19.0
+pycryptodome>=3.19.0         # transitive: enables PyPDF2 AES decryption
 python-docx>=1.0.0
+python-pptx>=0.6.21          # required by text_extraction_service.py (was missing — F1.5)
 openpyxl>=3.1.0
 xlrd>=2.0.0
-requests>=2.31.0
+requests>=2.33.0             # CVE-2026-25645
 
-# Testing
+# Testing (consider splitting into requirements-dev.txt — F3.11)
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 pytest-cov>=4.1.0

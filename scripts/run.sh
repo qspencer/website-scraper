@@ -20,30 +20,39 @@ cd "$PROJECT_DIR"
 # --- Helper functions ---
 
 cleanup_old_process() {
-    # Kill by PID file
+    local OLD_PID=""
     if [ -f "$PID_FILE" ]; then
         OLD_PID=$(cat "$PID_FILE")
-        if kill -0 "$OLD_PID" 2>/dev/null; then
-            echo "Stopping previous instance (PID $OLD_PID)..."
-            kill "$OLD_PID" 2>/dev/null || true
-            sleep 2
-            # Force kill if still running
-            if kill -0 "$OLD_PID" 2>/dev/null; then
-                echo "Force killing PID $OLD_PID..."
-                kill -9 "$OLD_PID" 2>/dev/null || true
-                sleep 1
-            fi
-        fi
-        rm -f "$PID_FILE"
     fi
 
-    # Also kill anything still on the port
+    # Kill our own previous instance by PID
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+        echo "Stopping previous instance (PID $OLD_PID)..."
+        kill "$OLD_PID" 2>/dev/null || true
+        sleep 2
+        if kill -0 "$OLD_PID" 2>/dev/null; then
+            echo "Force killing PID $OLD_PID..."
+            kill -9 "$OLD_PID" 2>/dev/null || true
+            sleep 1
+        fi
+    fi
+    rm -f "$PID_FILE"
+
+    # Anything still holding the port — only kill if it's our PID, otherwise refuse.
+    # Avoids force-killing an unrelated process that happens to be on port $PORT.
     local PORT_PIDS
     PORT_PIDS=$(lsof -ti :"$PORT" 2>/dev/null || true)
     if [ -n "$PORT_PIDS" ]; then
-        echo "Killing remaining processes on port $PORT..."
-        echo "$PORT_PIDS" | xargs kill -9 2>/dev/null || true
-        sleep 1
+        for pid in $PORT_PIDS; do
+            if [ -n "$OLD_PID" ] && [ "$pid" = "$OLD_PID" ]; then
+                continue  # already handled above
+            fi
+            echo "ERROR: port $PORT is held by an unrelated process (PID $pid)." >&2
+            echo "       Refusing to kill it. Free the port manually and retry:" >&2
+            echo "       lsof -i :$PORT     # to inspect" >&2
+            echo "       kill $pid          # if you're sure" >&2
+            exit 1
+        done
     fi
 }
 
@@ -133,7 +142,10 @@ cleanup_old_process
 mkdir -p "$(dirname "$LOG_FILE")"
 
 echo "Starting app..."
-nohup uvicorn app.main:app --host "$HOST" --port "$PORT" > "$LOG_FILE" 2>&1 &
+# Append (>>) rather than truncate (>) so prior session's startup output and any crash trace survive.
+echo "" >> "$LOG_FILE"
+echo "===== $(date -Iseconds) ===== app start =====" >> "$LOG_FILE"
+nohup uvicorn app.main:app --host "$HOST" --port "$PORT" >> "$LOG_FILE" 2>&1 &
 APP_PID=$!
 echo "$APP_PID" > "$PID_FILE"
 
