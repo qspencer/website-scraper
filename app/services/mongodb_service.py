@@ -41,8 +41,18 @@ def _get_collection():
     return _get_db()["documents"]
 
 
-def _ensure_indexes():
-    """Create indexes for search and queries."""
+_indexes_ensured: bool = False
+
+
+def _ensure_indexes(force: bool = False):
+    """Create indexes for search and queries (idempotent; runs at most once per process).
+
+    Previously called on every store_document insert, which probed index_information
+    per write. Pass force=True to re-run (e.g. after dropping the collection externally).
+    """
+    global _indexes_ensured
+    if _indexes_ensured and not force:
+        return
     col = _get_collection()
     # Drop old text index if it exists with different fields
     try:
@@ -60,6 +70,7 @@ def _ensure_indexes():
          ("title", "text"), ("keywords", "text")],
         name="text_search", default_language="english",
     )
+    _indexes_ensured = True
     col.create_index("source_url")
     col.create_index("scan_url")
     col.create_index("downloaded_at")

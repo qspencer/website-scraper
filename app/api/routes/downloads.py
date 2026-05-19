@@ -3,6 +3,7 @@ import csv
 import functools
 import io
 import json
+import time
 import uuid
 from typing import Dict, List
 
@@ -21,6 +22,7 @@ from app.schemas.document import DocumentInfo
 from app.services.download_service import download_service
 from app.services import mongodb_service
 from app.services import ai_summarization_service
+from app.services.background_tasks import track
 from app.services.text_extraction_service import extract_text
 from app.utils.file_utils import validate_download_path, ensure_directory_exists
 from app.services.settings_service import runtime_settings
@@ -111,6 +113,7 @@ async def start_download(request: DownloadRequest):
         "download_path": abs_path,
         "status": "pending",
         "cancelled": False,
+        "start_time": time.time(),
     }
 
     logger.info(f"Download session created: {download_id} for {len(selected_docs)} files")
@@ -225,6 +228,7 @@ async def start_mongodb_download(request: DownloadRequest):
         "scan_url": scan_url,
         "status": "pending",
         "cancelled": False,
+        "start_time": time.time(),
     }
 
     logger.info(f"MongoDB download session created: {download_id} for {len(selected_docs)} files")
@@ -408,7 +412,7 @@ async def mongodb_download_progress(session_id: str):
         # Kick off background summarization if AI is configured
         if ai_configured and completed > 0:
             logger.info("Starting background summarization")
-            asyncio.create_task(ai_summarization_service.summarize_pending_documents())
+            track(ai_summarization_service.summarize_pending_documents(), name="summarize_pending_documents")
 
     return EventSourceResponse(event_generator())
 
@@ -467,7 +471,7 @@ async def start_summarization():
     if ai_summarization_service.is_running():
         return {"message": "Summarization is already running", "started": False}
 
-    asyncio.create_task(ai_summarization_service.summarize_pending_documents())
+    track(ai_summarization_service.summarize_pending_documents(), name="summarize_pending_documents")
     return {"message": "Summarization started in background", "started": True}
 
 
@@ -558,7 +562,7 @@ async def summarize_scan(request: dict):
     if ai_summarization_service.is_running():
         return {"message": "Summarization is already running", "started": False}
 
-    asyncio.create_task(ai_summarization_service.summarize_pending_documents())
+    track(ai_summarization_service.summarize_pending_documents(), name="summarize_pending_documents")
     return {"message": "Summarization started in background", "started": True}
 
 
@@ -588,7 +592,7 @@ async def retry_scan_failed(request: dict):
             "started": False,
         }
 
-    asyncio.create_task(ai_summarization_service.summarize_pending_documents())
+    track(ai_summarization_service.summarize_pending_documents(), name="summarize_pending_documents")
     return {
         "message": f"Reset {reset_count} failed summaries, retrying in background",
         "reset_count": reset_count,
@@ -705,7 +709,7 @@ async def retry_failed_summaries():
     if reset_count == 0:
         return {"message": "No failed summaries to retry", "reset_count": 0, "started": False}
 
-    asyncio.create_task(ai_summarization_service.summarize_pending_documents())
+    track(ai_summarization_service.summarize_pending_documents(), name="summarize_pending_documents")
     return {
         "message": f"Reset {reset_count} failed summaries, re-running in background",
         "reset_count": reset_count,

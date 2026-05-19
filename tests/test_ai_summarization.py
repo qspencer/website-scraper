@@ -579,10 +579,15 @@ class TestSummarizationEndpoints:
         assert data["started"] is False
         assert "already running" in data["message"]
 
-    @patch("app.api.routes.downloads.asyncio")
+    # Patch summarize_pending_documents itself (not asyncio.create_task on the route
+    # module) so the route's track() call schedules a no-op coroutine. This both
+    # silences the leaked-coroutine RuntimeWarning and lets us verify scheduling
+    # directly by call count on the patched function.
+    @patch("app.api.routes.downloads.ai_summarization_service.summarize_pending_documents",
+           new_callable=AsyncMock)
     @patch("app.services.ai_summarization_service.is_running", return_value=False)
     @patch("app.api.routes.downloads.runtime_settings")
-    def test_start_summarization_success(self, mock_settings, mock_running, mock_asyncio, client):
+    def test_start_summarization_success(self, mock_settings, mock_running, mock_summarize, client):
         mock_settings.ai_api_url = "https://api.example.com"
         mock_settings.ai_api_key = "sk-test"
         mock_settings.ai_model = "test-model"
@@ -591,12 +596,13 @@ class TestSummarizationEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert data["started"] is True
-        mock_asyncio.create_task.assert_called_once()
+        mock_summarize.assert_called_once()
 
-    @patch("app.api.routes.downloads.asyncio")
+    @patch("app.api.routes.downloads.ai_summarization_service.summarize_pending_documents",
+           new_callable=AsyncMock)
     @patch.object(mongodb_service, "reset_failed_summaries", return_value=3)
     @patch("app.api.routes.downloads.runtime_settings")
-    def test_retry_failed_summaries(self, mock_settings, mock_reset, mock_asyncio, client):
+    def test_retry_failed_summaries(self, mock_settings, mock_reset, mock_summarize, client):
         mock_settings.ai_api_url = "https://api.example.com"
         mock_settings.ai_api_key = "sk-test"
         mock_settings.ai_model = "test-model"
@@ -606,7 +612,7 @@ class TestSummarizationEndpoints:
         data = resp.json()
         assert data["reset_count"] == 3
         assert data["started"] is True
-        mock_asyncio.create_task.assert_called_once()
+        mock_summarize.assert_called_once()
 
     @patch.object(mongodb_service, "reset_failed_summaries", return_value=0)
     @patch("app.api.routes.downloads.runtime_settings")
