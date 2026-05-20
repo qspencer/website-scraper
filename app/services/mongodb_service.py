@@ -73,11 +73,18 @@ def _ensure_indexes(force: bool = False):
          ("title", "text"), ("keywords", "text")],
         name="text_search", default_language="english",
     )
-    _indexes_ensured = True
     col.create_index("source_url")
     col.create_index("scan_url")
     col.create_index("downloaded_at")
     col.create_index("extension")
+    # Sparse index — only documents with a non-null category are indexed; saves space.
+    col.create_index("category", sparse=True)
+
+    # Categories collection: at most one category set per scan_url.
+    categories_col = _get_db()["categories"]
+    categories_col.create_index("scan_url", unique=True)
+
+    _indexes_ensured = True
     logger.debug("MongoDB indexes ensured")
 
 
@@ -224,6 +231,9 @@ def store_document(
             "summary_status": "pending",
             "summarized_at": None,
             "summary_model": None,
+            # Content changed — old category no longer guaranteed to apply.
+            "category": None,
+            "categorized_at": None,
         }
 
         col.update_one({"_id": existing["_id"]}, {"$set": update_fields})
@@ -264,6 +274,9 @@ def store_document(
         "summary_status": "pending",
         "summarized_at": None,
         "summary_model": None,
+        # Categorization fields (populated by app.services.categorization_service).
+        "category": None,
+        "categorized_at": None,
     }
 
     result = col.insert_one(doc)
@@ -789,3 +802,289 @@ def delete_document(doc_id: str) -> bool:
     col.delete_one({"_id": ObjectId(doc_id)})
     logger.info(f"Deleted document: {doc_id}")
     return True
+
+
+# ---------------------------------------------------------------------------
+# Categorization (see SPEC_CATEGORIZATION_2026-05-20.md).
+#
+# Data shapes:
+#   documents:        adds {"category": Optional[str], "categorized_at": Optional[datetime]}
+#   categories:       one document per scan_url. Shape:
+#     {
+#       "scan_url": str,
+#       "categories": [{"name": str, "description": str, "count": int}, ...],
+#       "iterations_used": int,
+#       "created_at": datetime,
+#       "model": str,
+#       "doc_count_at_creation": int,
+#     }
+# ---------------------------------------------------------------------------
+
+
+def _categories_collection():
+    """Get the categories collection (separate from documents)."""
+    return _get_db()["categories"]
+
+
+def get_category_set(scan_url: str) -> Optional[Dict[str, Any]]:
+    """Return the category set for a scan, or None if not yet categorized."""
+    _ensure_indexes()
+    doc = _categories_collection().find_one({"scan_url": scan_url})
+    if doc is None:
+        return None
+    doc["_id"] = str(doc["_id"])
+    return doc
+
+
+def save_category_set(
+    scan_url: str,
+    categories: List[Dict[str, Any]],
+    iterations_used: int,
+    model: str,
+    doc_count_at_creation: int,
+) -> str:
+    """Upsert a category set for ``scan_url``. Replaces any previous set entirely.
+
+    ``categories`` is a list of {"name", "description", "count"} dicts. Returns the id.
+    """
+    _ensure_indexes()
+    payload = {
+        "scan_url": scan_url,
+        "categories": categories,
+        "iterations_used": iterations_used,
+        "model": model,
+        "doc_count_at_creation": doc_count_at_creation,
+        "created_at": datetime.now(timezone.utc),
+    }
+    result = _categories_collection().replace_one(
+        {"scan_url": scan_url}, payload, upsert=True,
+    )
+    inserted = result.upserted_id
+    if inserted is not None:
+        logger.info(f"Saved new category set for {scan_url}: {len(categories)} categories")
+        return str(inserted)
+    existing = _categories_collection().find_one({"scan_url": scan_url}, {"_id": 1})
+    logger.info(f"Replaced category set for {scan_url}: {len(categories)} categories")
+    return str(existing["_id"])
+
+
+def delete_category_set(scan_url: str) -> bool:
+    """Delete the category set for a scan AND clear ``category`` on its documents.
+
+    Returns True if a category set was removed, False if there was none.
+    """
+    result = _categories_collection().delete_one({"scan_url": scan_url})
+    clear_document_categories(scan_url)
+    if result.deleted_count:
+        logger.info(f"Deleted category set for {scan_url}")
+        return True
+    return False
+
+
+def set_document_category(doc_id: str, category: Optional[str]) -> bool:
+    """Set (or clear, when category is None) the category on one document."""
+    from bson import ObjectId
+    col = _get_collection()
+    result = col.update_one(
+        {"_id": ObjectId(doc_id)},
+        {"$set": {
+            "category": category,
+            "categorized_at": datetime.now(timezone.utc) if category else None,
+        }},
+    )
+    return result.matched_count > 0
+
+
+def bulk_set_document_categories(assignments: Dict[str, str]) -> int:
+    """Assign categories to many documents at once. ``assignments`` is {doc_id: category}.
+
+    Returns the number of documents updated. Uses pymongo bulk_write for efficiency.
+    """
+    if not assignments:
+        return 0
+    from bson import ObjectId
+    from pymongo import UpdateOne
+
+    now = datetime.now(timezone.utc)
+    ops = [
+        UpdateOne(
+            {"_id": ObjectId(doc_id)},
+            {"$set": {"category": category, "categorized_at": now}},
+        )
+        for doc_id, category in assignments.items()
+    ]
+    result = _get_collection().bulk_write(ops, ordered=False)
+    logger.info(f"Bulk-categorized {result.modified_count} documents")
+    return result.modified_count
+
+
+def clear_document_categories(scan_url: str) -> int:
+    """Null the ``category`` field on every document in a scan. Returns # updated."""
+    result = _get_collection().update_many(
+        {"scan_url": scan_url, "category": {"$ne": None}},
+        {"$set": {"category": None, "categorized_at": None}},
+    )
+    if result.modified_count:
+        logger.info(f"Cleared category on {result.modified_count} documents for {scan_url}")
+    return result.modified_count
+
+
+def get_category_counts(scan_url: str) -> Dict[str, int]:
+    """Live count of documents per category for a scan.
+
+    Returns a dict {category_name: count}; documents with no category contribute
+    to the empty-string key "" (caller can present that as "Uncategorized").
+    """
+    pipeline = [
+        {"$match": {"scan_url": scan_url}},
+        {"$group": {"_id": {"$ifNull": ["$category", ""]}, "count": {"$sum": 1}}},
+    ]
+    counts: Dict[str, int] = {}
+    for row in _get_collection().aggregate(pipeline):
+        counts[row["_id"]] = row["count"]
+    return counts
+
+
+def _refresh_category_set_counts(scan_url: str) -> None:
+    """Recompute the ``count`` field on each entry in the persisted category set.
+
+    Called after any operation that changes per-document assignments
+    (accept, rename, merge, delete) so the saved counts stay in sync.
+    """
+    cset = _categories_collection().find_one({"scan_url": scan_url})
+    if cset is None:
+        return
+    live_counts = get_category_counts(scan_url)
+    for entry in cset["categories"]:
+        entry["count"] = live_counts.get(entry["name"], 0)
+    _categories_collection().update_one(
+        {"_id": cset["_id"]},
+        {"$set": {"categories": cset["categories"]}},
+    )
+
+
+def accept_categorization(
+    scan_url: str,
+    categories: List[Dict[str, str]],
+    assignments: Dict[str, str],
+    iterations_used: int,
+    model: str,
+) -> str:
+    """Persist a completed categorization run.
+
+    Atomically replaces any prior category set for the scan, clears prior
+    per-document category assignments, applies the new ones, and refreshes
+    the persisted per-category counts to match the live document state.
+    ``categories`` is [{"name", "description"}]; ``assignments`` is {doc_id: name}.
+    """
+    # Stamp counts from the live assignments so the saved set is internally consistent
+    # even before _refresh below recomputes from MongoDB.
+    counts: Dict[str, int] = {}
+    for name in assignments.values():
+        counts[name] = counts.get(name, 0) + 1
+    enriched = [
+        {"name": c["name"], "description": c.get("description", ""), "count": counts.get(c["name"], 0)}
+        for c in categories
+    ]
+    set_id = save_category_set(
+        scan_url=scan_url,
+        categories=enriched,
+        iterations_used=iterations_used,
+        model=model,
+        doc_count_at_creation=len(assignments),
+    )
+    clear_document_categories(scan_url)
+    bulk_set_document_categories(assignments)
+    _refresh_category_set_counts(scan_url)
+    return set_id
+
+
+def rename_category(scan_url: str, old_name: str, new_name: str) -> int:
+    """Rename a category. Updates the persisted set + all matching documents.
+
+    Returns the number of documents whose category was updated. Raises ValueError
+    if ``new_name`` already exists in the set (use merge_categories instead).
+    """
+    old_name = old_name.strip()
+    new_name = new_name.strip()
+    if not new_name:
+        raise ValueError("New category name must be non-empty")
+    cset = _categories_collection().find_one({"scan_url": scan_url})
+    if cset is None:
+        raise ValueError(f"No category set exists for {scan_url}")
+
+    existing_names = {c["name"].casefold() for c in cset["categories"]}
+    if new_name.casefold() in existing_names and new_name.casefold() != old_name.casefold():
+        raise ValueError(f"Category {new_name!r} already exists (use merge instead)")
+
+    for entry in cset["categories"]:
+        if entry["name"] == old_name:
+            entry["name"] = new_name
+            break
+    else:
+        raise ValueError(f"Category {old_name!r} not found in set for {scan_url}")
+
+    _categories_collection().update_one(
+        {"_id": cset["_id"]}, {"$set": {"categories": cset["categories"]}}
+    )
+    result = _get_collection().update_many(
+        {"scan_url": scan_url, "category": old_name},
+        {"$set": {"category": new_name, "categorized_at": datetime.now(timezone.utc)}},
+    )
+    logger.info(f"Renamed category {old_name!r} -> {new_name!r} for {scan_url} ({result.modified_count} docs)")
+    return result.modified_count
+
+
+def merge_categories(scan_url: str, source_name: str, target_name: str) -> int:
+    """Reassign all documents from ``source_name`` to ``target_name`` and drop source from the set.
+
+    Returns the number of documents moved. ``target_name`` must already exist.
+    """
+    source_name = source_name.strip()
+    target_name = target_name.strip()
+    if source_name == target_name:
+        return 0
+    cset = _categories_collection().find_one({"scan_url": scan_url})
+    if cset is None:
+        raise ValueError(f"No category set exists for {scan_url}")
+    names = {c["name"] for c in cset["categories"]}
+    if source_name not in names:
+        raise ValueError(f"Source category {source_name!r} not found")
+    if target_name not in names:
+        raise ValueError(f"Target category {target_name!r} not found")
+
+    cset["categories"] = [c for c in cset["categories"] if c["name"] != source_name]
+    _categories_collection().update_one(
+        {"_id": cset["_id"]}, {"$set": {"categories": cset["categories"]}}
+    )
+    result = _get_collection().update_many(
+        {"scan_url": scan_url, "category": source_name},
+        {"$set": {"category": target_name, "categorized_at": datetime.now(timezone.utc)}},
+    )
+    _refresh_category_set_counts(scan_url)
+    logger.info(f"Merged {source_name!r} -> {target_name!r} for {scan_url} ({result.modified_count} docs)")
+    return result.modified_count
+
+
+def delete_category(scan_url: str, name: str) -> int:
+    """Remove a category from the set and null the field on its documents.
+
+    Affected documents become "Uncategorized" (``category=None``). Returns the
+    number of documents that lost their category.
+    """
+    name = name.strip()
+    cset = _categories_collection().find_one({"scan_url": scan_url})
+    if cset is None:
+        raise ValueError(f"No category set exists for {scan_url}")
+    if name not in {c["name"] for c in cset["categories"]}:
+        raise ValueError(f"Category {name!r} not found")
+    cset["categories"] = [c for c in cset["categories"] if c["name"] != name]
+    _categories_collection().update_one(
+        {"_id": cset["_id"]}, {"$set": {"categories": cset["categories"]}}
+    )
+    result = _get_collection().update_many(
+        {"scan_url": scan_url, "category": name},
+        {"$set": {"category": None, "categorized_at": None}},
+    )
+    logger.info(f"Deleted category {name!r} from {scan_url} ({result.modified_count} docs un-categorized)")
+    return result.modified_count

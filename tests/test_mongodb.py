@@ -823,3 +823,205 @@ class TestDocumentsPage:
         resp = client.get("/documents")
         assert resp.status_code == 200
         assert b"Search Documents" in resp.content
+
+
+# ---------------------------------------------------------------------------
+# Categorization helpers (M2). All mocked — see
+# tests/integration/test_categories_roundtrip.py for the live round-trip.
+# ---------------------------------------------------------------------------
+
+
+def _mock_categories_setup(category_set_doc=None):
+    """Wire mongodb_service._categories_collection + _get_collection mocks.
+
+    Returns (categories_col_mock, docs_col_mock, db_mock) so the test can set
+    up further expectations and assert calls.
+    """
+    docs_col = MagicMock()
+    categories_col = MagicMock()
+    categories_col.find_one.return_value = category_set_doc
+
+    db = MagicMock()
+    def _getitem(name):
+        return {"documents": docs_col, "categories": categories_col}[name]
+    db.__getitem__.side_effect = _getitem
+    return categories_col, docs_col, db
+
+
+class TestCategoryCRUD:
+
+    def test_get_category_set_missing(self):
+        cats_col, _docs, db = _mock_categories_setup(category_set_doc=None)
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_ensure_indexes"):
+            assert mongodb_service.get_category_set("https://x.test/scan") is None
+
+    def test_get_category_set_found(self):
+        cset = {
+            "_id": ObjectId(),
+            "scan_url": "https://x.test/scan",
+            "categories": [{"name": "A", "description": "", "count": 3}],
+        }
+        cats_col, _docs, db = _mock_categories_setup(category_set_doc=cset)
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_ensure_indexes"):
+            result = mongodb_service.get_category_set("https://x.test/scan")
+        assert result["scan_url"] == "https://x.test/scan"
+        assert isinstance(result["_id"], str)  # stringified for JSON serializability
+        assert result["categories"][0]["name"] == "A"
+
+    def test_save_category_set_inserts_on_first_save(self):
+        cats_col, _docs, db = _mock_categories_setup()
+        oid = ObjectId()
+        cats_col.replace_one.return_value = MagicMock(upserted_id=oid)
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_ensure_indexes"):
+            result_id = mongodb_service.save_category_set(
+                scan_url="https://x.test/scan",
+                categories=[{"name": "A", "description": "", "count": 0}],
+                iterations_used=2,
+                model="m",
+                doc_count_at_creation=10,
+            )
+        assert result_id == str(oid)
+        assert cats_col.replace_one.call_args[1]["upsert"] is True
+
+    def test_save_category_set_replaces_existing(self):
+        existing_id = ObjectId()
+        cats_col, _docs, db = _mock_categories_setup()
+        cats_col.replace_one.return_value = MagicMock(upserted_id=None)
+        cats_col.find_one.return_value = {"_id": existing_id}
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_ensure_indexes"):
+            result_id = mongodb_service.save_category_set(
+                scan_url="https://x.test/scan",
+                categories=[],
+                iterations_used=1,
+                model="m",
+                doc_count_at_creation=0,
+            )
+        assert result_id == str(existing_id)
+
+    def test_delete_category_set_clears_documents_too(self):
+        cats_col, docs_col, db = _mock_categories_setup()
+        cats_col.delete_one.return_value = MagicMock(deleted_count=1)
+        docs_col.update_many.return_value = MagicMock(modified_count=5)
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_get_collection", return_value=docs_col):
+            removed = mongodb_service.delete_category_set("https://x.test/scan")
+        assert removed is True
+        docs_col.update_many.assert_called_once()
+
+    def test_delete_category_set_no_set_returns_false(self):
+        cats_col, docs_col, db = _mock_categories_setup()
+        cats_col.delete_one.return_value = MagicMock(deleted_count=0)
+        docs_col.update_many.return_value = MagicMock(modified_count=0)
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_get_collection", return_value=docs_col):
+            assert mongodb_service.delete_category_set("https://x.test/scan") is False
+
+    def test_bulk_set_document_categories_empty_noop(self):
+        with patch.object(mongodb_service, "_get_collection") as get_col:
+            mongodb_service.bulk_set_document_categories({})
+            get_col.assert_not_called()
+
+    def test_bulk_set_document_categories_uses_bulk_write(self):
+        docs_col = MagicMock()
+        docs_col.bulk_write.return_value = MagicMock(modified_count=3)
+        assignments = {str(ObjectId()): "A", str(ObjectId()): "B", str(ObjectId()): "A"}
+        with patch.object(mongodb_service, "_get_collection", return_value=docs_col):
+            n = mongodb_service.bulk_set_document_categories(assignments)
+        assert n == 3
+        # One UpdateOne per document
+        ops = docs_col.bulk_write.call_args[0][0]
+        assert len(ops) == 3
+
+    def test_get_category_counts_buckets_uncategorized_under_empty_key(self):
+        docs_col = MagicMock()
+        docs_col.aggregate.return_value = iter([
+            {"_id": "Financial", "count": 12},
+            {"_id": "Marketing", "count": 4},
+            {"_id": "", "count": 7},  # uncategorized
+        ])
+        with patch.object(mongodb_service, "_get_collection", return_value=docs_col):
+            counts = mongodb_service.get_category_counts("https://x.test/scan")
+        assert counts == {"Financial": 12, "Marketing": 4, "": 7}
+
+
+class TestCategoryEditOperations:
+
+    def _cset(self, categories):
+        return {"_id": ObjectId(), "scan_url": "https://x.test/scan", "categories": categories}
+
+    def test_rename_category_updates_set_and_docs(self):
+        cset = self._cset([
+            {"name": "Old", "description": "", "count": 5},
+            {"name": "Other", "description": "", "count": 3},
+        ])
+        cats_col, docs_col, db = _mock_categories_setup(category_set_doc=cset)
+        docs_col.update_many.return_value = MagicMock(modified_count=5)
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_get_collection", return_value=docs_col):
+            n = mongodb_service.rename_category("https://x.test/scan", "Old", "New")
+        assert n == 5
+        # Persisted set should now use the new name
+        update_call = cats_col.update_one.call_args[0][1]["$set"]["categories"]
+        names = [c["name"] for c in update_call]
+        assert "New" in names and "Old" not in names
+
+    def test_rename_category_rejects_collision(self):
+        cset = self._cset([
+            {"name": "A", "description": "", "count": 5},
+            {"name": "B", "description": "", "count": 3},
+        ])
+        cats_col, _docs, db = _mock_categories_setup(category_set_doc=cset)
+        with patch.object(mongodb_service, "_get_db", return_value=db):
+            with pytest.raises(ValueError, match="already exists"):
+                mongodb_service.rename_category("https://x.test/scan", "A", "B")
+
+    def test_rename_category_case_insensitive_self_rename_allowed(self):
+        cset = self._cset([{"name": "Reports", "description": "", "count": 5}])
+        cats_col, docs_col, db = _mock_categories_setup(category_set_doc=cset)
+        docs_col.update_many.return_value = MagicMock(modified_count=5)
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_get_collection", return_value=docs_col):
+            n = mongodb_service.rename_category("https://x.test/scan", "Reports", "reports")
+        assert n == 5
+
+    def test_rename_category_unknown_source_raises(self):
+        cset = self._cset([{"name": "A", "description": "", "count": 1}])
+        cats_col, _docs, db = _mock_categories_setup(category_set_doc=cset)
+        with patch.object(mongodb_service, "_get_db", return_value=db):
+            with pytest.raises(ValueError, match="not found"):
+                mongodb_service.rename_category("https://x.test/scan", "Missing", "Whatever")
+
+    def test_merge_categories_moves_docs_and_drops_source(self):
+        cset = self._cset([
+            {"name": "Source", "description": "", "count": 2},
+            {"name": "Target", "description": "", "count": 10},
+        ])
+        cats_col, docs_col, db = _mock_categories_setup(category_set_doc=cset)
+        docs_col.update_many.return_value = MagicMock(modified_count=2)
+        docs_col.aggregate.return_value = iter([])  # for _refresh_category_set_counts
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_get_collection", return_value=docs_col):
+            n = mongodb_service.merge_categories("https://x.test/scan", "Source", "Target")
+        assert n == 2
+
+    def test_merge_categories_same_name_is_noop(self):
+        # No DB interactions because we early-return
+        assert mongodb_service.merge_categories("https://x.test/scan", "A", "A") == 0
+
+    def test_delete_category_nullifies_docs(self):
+        cset = self._cset([
+            {"name": "Doomed", "description": "", "count": 4},
+            {"name": "Surviving", "description": "", "count": 9},
+        ])
+        cats_col, docs_col, db = _mock_categories_setup(category_set_doc=cset)
+        docs_col.update_many.return_value = MagicMock(modified_count=4)
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_get_collection", return_value=docs_col):
+            n = mongodb_service.delete_category("https://x.test/scan", "Doomed")
+        assert n == 4
+        remaining = cats_col.update_one.call_args[0][1]["$set"]["categories"]
+        assert [c["name"] for c in remaining] == ["Surviving"]
