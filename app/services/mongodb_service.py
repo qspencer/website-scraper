@@ -389,6 +389,27 @@ def get_pending_summaries(limit: int = 50) -> List[Dict[str, Any]]:
     return results
 
 
+def get_summarized_documents_for_scan(scan_url: str) -> List[Dict[str, Any]]:
+    """Return all documents in a scan that have a completed summary.
+
+    Projected to the fields the categorization service needs — no extracted_text,
+    no GridFS payload. Used by app.services.categorization_service.
+    """
+    col = _get_collection()
+    cursor = col.find(
+        {"scan_url": scan_url, "summary_status": "complete"},
+        {
+            "_id": 1, "filename": 1, "title": 1, "short_summary": 1,
+            "keywords": 1, "document_type": 1,
+        },
+    )
+    results = []
+    for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        results.append(doc)
+    return results
+
+
 def update_summary(
     doc_id: str,
     summary: str,
