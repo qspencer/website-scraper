@@ -23,6 +23,11 @@
                 </div>
                 <div class="flex items-center gap-2">
                     <button
+                        id="categorizeBtn"
+                        onclick="openCategorizeModal()"
+                        class="px-3 py-1.5 text-sm font-medium rounded-lg transition hidden border border-blue-300 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >Categorize</button>
+                    <button
                         id="retryBtn"
                         onclick="retryFailed()"
                         class="px-3 py-1.5 text-sm font-medium rounded-lg transition hidden border border-red-300 text-red-700 hover:bg-red-50"
@@ -157,6 +162,31 @@
             <div id="detailContent" class="p-4 overflow-y-auto flex-1"></div>
         </div>
     </div>
+
+    <!-- Categorize modal (M5) -->
+    <div id="categorizeModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full mx-4 max-h-[85vh] flex flex-col">
+            <div class="flex items-center justify-between p-4 border-b">
+                <h2 class="text-lg font-semibold text-gray-800">Categorize Documents</h2>
+                <button onclick="closeCategorizeModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+            </div>
+            <div class="p-4 overflow-y-auto flex-1">
+                <div id="categorizeLog" class="space-y-4 text-sm"></div>
+                <div id="categorizeFinal" class="hidden mt-4 border-t pt-4">
+                    <h3 class="font-semibold text-gray-800 mb-3">Final categories</h3>
+                    <div id="categorizeChart" class="space-y-2"></div>
+                    <div id="categorizeQualityNote" class="mt-3 text-xs text-gray-500"></div>
+                </div>
+                <div id="categorizeError" class="hidden mt-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm"></div>
+            </div>
+            <div class="flex items-center justify-end gap-2 p-4 border-t bg-gray-50">
+                <button id="categorizeDiscardBtn" onclick="discardCategorization()"
+                    class="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded hover:bg-gray-100">Cancel</button>
+                <button id="categorizeAcceptBtn" onclick="acceptCategorization()"
+                    class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded hover:bg-blue-700 hidden">Accept</button>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}
 
@@ -253,12 +283,36 @@
         }
     }
 
+    // Minimum summarized docs needed to offer categorization.
+    // Mirrors categorization_service.MIN_SUMMARIZED_DOCS — keep in sync.
+    const CATEGORIZE_MIN_DOCS = 10;
+
     function updateSummarizationBar(stats, aiConfigured, isRunning) {
         const bar = document.getElementById('summarizationBar');
         const statsText = document.getElementById('summaryStatsText');
         const btn = document.getElementById('summarizeBtn');
         const retryBtn = document.getElementById('retryBtn');
+        const categorizeBtn = document.getElementById('categorizeBtn');
         const spinner = document.getElementById('summarySpinner');
+
+        // Categorize button visibility — independent of the summarize/retry logic below.
+        // Hidden entirely if AI isn't configured; otherwise shown, disabled (with tooltip)
+        // until enough summarized documents exist or while summarization is running.
+        if (!aiConfigured) {
+            categorizeBtn.classList.add('hidden');
+        } else {
+            categorizeBtn.classList.remove('hidden');
+            if (isRunning) {
+                categorizeBtn.disabled = true;
+                categorizeBtn.title = 'Wait for summarization to finish before categorizing';
+            } else if ((stats.complete || 0) < CATEGORIZE_MIN_DOCS) {
+                categorizeBtn.disabled = true;
+                categorizeBtn.title = `Needs at least ${CATEGORIZE_MIN_DOCS} summarized documents (have ${stats.complete || 0})`;
+            } else {
+                categorizeBtn.disabled = false;
+                categorizeBtn.title = `Group these ${stats.complete} summarized documents into categories`;
+            }
+        }
 
         const total = stats.pending + stats.complete + stats.failed + stats.skipped;
         if (total === 0) {
@@ -966,11 +1020,260 @@
         return labels[method] || method;
     }
 
-    function escapeHtml(text) {
-        if (!text) return '';
+    // -----------------------------------------------------------------------
+    // Categorize modal (M5)
+    // -----------------------------------------------------------------------
+    //
+    // State machine driven by SSE events from /api/download/mongodb/categorize/*:
+    //   running  → log appended as iteration_start / proposal / phase_progress
+    //              / quality_report events arrive
+    //   final    → assignment chart rendered; Accept button enabled
+    //   error    → error message shown; Accept stays disabled
+    //   cancelled → modal closed silently
+    //
+    // The session lives server-side in session_store.categorize_sessions until
+    // either /accept (persists + drops session) or TTL eviction.
+
+    let categorizeSessionId = null;
+    let categorizeEventSource = null;
+    let categorizeState = null;   // 'running' | 'complete' | 'error' | 'cancelled' | null
+    let categorizeIterationEl = null;  // current iteration's <div> being appended to
+    let categorizeAssignTotal = 0;     // total Phase 2 batches for the current iteration
+
+    function openCategorizeModal() {
+        if (!selectedScanUrl) return;
+        // Reset modal state
+        document.getElementById('categorizeLog').innerHTML = '';
+        document.getElementById('categorizeFinal').classList.add('hidden');
+        document.getElementById('categorizeChart').innerHTML = '';
+        document.getElementById('categorizeQualityNote').innerHTML = '';
+        document.getElementById('categorizeError').classList.add('hidden');
+        document.getElementById('categorizeError').textContent = '';
+        document.getElementById('categorizeAcceptBtn').classList.add('hidden');
+        document.getElementById('categorizeAcceptBtn').disabled = false;
+        document.getElementById('categorizeDiscardBtn').textContent = 'Cancel';
+        document.getElementById('categorizeModal').classList.remove('hidden');
+        startCategorization();
+    }
+
+    function closeCategorizeModal() {
+        document.getElementById('categorizeModal').classList.add('hidden');
+        if (categorizeEventSource) {
+            categorizeEventSource.close();
+            categorizeEventSource = null;
+        }
+        categorizeSessionId = null;
+        categorizeState = null;
+        categorizeIterationEl = null;
+    }
+
+    async function startCategorization() {
+        categorizeState = 'running';
+        appendCategorizeLog('<div class="text-gray-600">Starting categorization …</div>');
+        try {
+            const url = `/api/download/mongodb/categorize/start?scan_url=${encodeURIComponent(selectedScanUrl)}`;
+            const resp = await fetch(url, { method: 'POST' });
+            if (!resp.ok) {
+                const errBody = await resp.json().catch(() => ({}));
+                throw new Error(errBody.detail || `HTTP ${resp.status}`);
+            }
+            const body = await resp.json();
+            categorizeSessionId = body.session_id;
+            attachCategorizeSSE(categorizeSessionId);
+        } catch (e) {
+            showCategorizeError(`Could not start categorization: ${e.message}`);
+            categorizeState = 'error';
+            document.getElementById('categorizeDiscardBtn').textContent = 'Close';
+        }
+    }
+
+    function attachCategorizeSSE(sessionId) {
+        const es = new EventSource(`/api/download/mongodb/categorize/progress/${encodeURIComponent(sessionId)}`);
+        categorizeEventSource = es;
+
+        es.addEventListener('iteration_start', (e) => {
+            const data = JSON.parse(e.data);
+            categorizeIterationEl = document.createElement('div');
+            categorizeIterationEl.className = 'border-l-4 border-blue-400 pl-3 py-1';
+            categorizeIterationEl.innerHTML = `<div class="font-semibold text-gray-700">Iteration ${data.iteration} of ${data.cap}</div>`;
+            document.getElementById('categorizeLog').appendChild(categorizeIterationEl);
+            categorizeAssignTotal = 0;
+        });
+
+        es.addEventListener('proposal', (e) => {
+            const data = JSON.parse(e.data);
+            appendIterationLine(`<span class="text-green-600">✓</span> Proposed <strong>${data.categories.length}</strong> categories`);
+        });
+
+        es.addEventListener('phase_progress', (e) => {
+            const data = JSON.parse(e.data);
+            if (data.phase !== 'assign') return;
+            categorizeAssignTotal = data.total;
+            // Replace the last "Assigning" line if present; otherwise append.
+            const last = categorizeIterationEl && categorizeIterationEl.querySelector('.assign-progress');
+            const msg = `<span class="text-green-600">${data.completed === data.total ? '✓' : '…'}</span> Assigning documents <strong>${data.completed}/${data.total}</strong> batches`;
+            if (last) {
+                last.innerHTML = msg;
+            } else {
+                const div = document.createElement('div');
+                div.className = 'assign-progress text-gray-700 mt-1';
+                div.innerHTML = msg;
+                if (categorizeIterationEl) categorizeIterationEl.appendChild(div);
+            }
+        });
+
+        es.addEventListener('quality_report', (e) => {
+            const data = JSON.parse(e.data);
+            const q = data.quality;
+            if (q.ok) {
+                appendIterationLine(`<span class="text-green-600">✓</span> Quality check: balanced`);
+            } else {
+                const signalText = q.signals.map(escapeHtml).join('; ');
+                appendIterationLine(`<span class="text-amber-600">⚠</span> Quality check: ${signalText}`);
+            }
+        });
+
+        es.addEventListener('final', (e) => {
+            const data = JSON.parse(e.data);
+            categorizeState = 'complete';
+            renderFinalChart(data);
+            document.getElementById('categorizeAcceptBtn').classList.remove('hidden');
+            document.getElementById('categorizeDiscardBtn').textContent = 'Discard';
+        });
+
+        es.addEventListener('error', (e) => {
+            const data = JSON.parse(e.data);
+            categorizeState = 'error';
+            showCategorizeError(data.message || 'Categorization failed');
+            document.getElementById('categorizeDiscardBtn').textContent = 'Close';
+        });
+
+        es.addEventListener('cancelled', () => {
+            categorizeState = 'cancelled';
+            closeCategorizeModal();
+        });
+
+        es.onerror = () => {
+            // EventSource auto-closes on stream end; only treat as error if we
+            // never reached a terminal state.
+            if (categorizeState === 'running') {
+                showCategorizeError('Connection to server lost during categorization');
+                categorizeState = 'error';
+                document.getElementById('categorizeDiscardBtn').textContent = 'Close';
+            }
+            if (categorizeEventSource) {
+                categorizeEventSource.close();
+                categorizeEventSource = null;
+            }
+        };
+    }
+
+    function appendIterationLine(html) {
+        if (!categorizeIterationEl) return;
         const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        div.className = 'text-gray-700 mt-1';
+        div.innerHTML = html;
+        categorizeIterationEl.appendChild(div);
+    }
+
+    function appendCategorizeLog(html) {
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        document.getElementById('categorizeLog').appendChild(div);
+    }
+
+    function renderFinalChart(finalData) {
+        const total = finalData.doc_count || 1;
+        const distribution = finalData.quality.distribution || {};
+        const chart = document.getElementById('categorizeChart');
+        chart.innerHTML = '';
+
+        // Sort categories by count descending; "Other" always last regardless.
+        const entries = Object.entries(distribution).filter(([, c]) => c > 0);
+        entries.sort((a, b) => {
+            if (a[0] === 'Other') return 1;
+            if (b[0] === 'Other') return -1;
+            return b[1] - a[1];
+        });
+
+        for (const [name, count] of entries) {
+            const pct = (count / total) * 100;
+            const isOther = name === 'Other';
+            const row = document.createElement('div');
+            row.className = 'flex items-center gap-3 text-sm';
+            row.innerHTML = `
+                <div class="w-48 truncate ${isOther ? 'italic text-gray-500' : 'text-gray-800'}" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
+                <div class="w-16 text-right text-gray-600 tabular-nums">${count} doc${count === 1 ? '' : 's'}</div>
+                <div class="flex-1 bg-gray-100 rounded h-4 relative overflow-hidden">
+                    <div class="absolute inset-y-0 left-0 ${isOther ? 'bg-gray-300' : 'bg-blue-400'} rounded" style="width: ${pct.toFixed(1)}%"></div>
+                </div>
+                <div class="w-12 text-right text-gray-600 tabular-nums">${pct.toFixed(0)}%</div>
+            `;
+            chart.appendChild(row);
+        }
+
+        const note = document.getElementById('categorizeQualityNote');
+        const q = finalData.quality;
+        const iters = finalData.iterations_used;
+        if (q.ok) {
+            note.textContent = `Converged after ${iters} iteration${iters === 1 ? '' : 's'}.`;
+        } else {
+            note.innerHTML = `Best result after ${iters} iteration${iters === 1 ? '' : 's'} — quality issues remain: ${q.signals.map(escapeHtml).join('; ')}. Accept anyway, or Discard to start over.`;
+        }
+        document.getElementById('categorizeFinal').classList.remove('hidden');
+    }
+
+    function showCategorizeError(message) {
+        const el = document.getElementById('categorizeError');
+        el.textContent = message;
+        el.classList.remove('hidden');
+    }
+
+    async function discardCategorization() {
+        // If still running, ask the server to cancel; otherwise just close.
+        if (categorizeState === 'running' && categorizeSessionId) {
+            try {
+                await fetch(`/api/download/mongodb/categorize/cancel/${encodeURIComponent(categorizeSessionId)}`, { method: 'POST' });
+            } catch (e) {
+                console.error('Cancel request failed:', e);
+            }
+        }
+        closeCategorizeModal();
+    }
+
+    async function acceptCategorization() {
+        if (categorizeState !== 'complete' || !categorizeSessionId) return;
+        const btn = document.getElementById('categorizeAcceptBtn');
+        btn.disabled = true;
+        try {
+            const resp = await fetch(`/api/download/mongodb/categorize/accept/${encodeURIComponent(categorizeSessionId)}`, {
+                method: 'POST',
+            });
+            if (!resp.ok) {
+                const body = await resp.json().catch(() => ({}));
+                throw new Error(body.detail || `HTTP ${resp.status}`);
+            }
+            closeCategorizeModal();
+            // M6 will refresh per-doc badges + category chips here. For M5 we just
+            // re-fetch the summary stats so any UI cues based on them update.
+            await loadSummaryStats();
+        } catch (e) {
+            showCategorizeError(`Accept failed: ${e.message}`);
+            btn.disabled = false;
+        }
+    }
+
+    // Safe for both text and attribute contexts: also escapes " and ' so the result
+    // can be interpolated into attribute values without breaking out. Matches the
+    // strengthened helper in results.html (eval finding F1.1).
+    function escapeHtml(text) {
+        if (text === null || text === undefined) return '';
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 </script>
 {% endblock %}
