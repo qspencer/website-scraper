@@ -11,9 +11,10 @@ This guide walks you through every feature of the Document Scraper application. 
 3. [Viewing Results](#viewing-results)
 4. [Downloading Documents](#downloading-documents)
 5. [Storing Documents in MongoDB](#storing-documents-in-mongodb)
-6. [Scan History](#scan-history)
-7. [Settings](#settings)
-8. [Troubleshooting](#troubleshooting)
+6. [Browsing Stored Documents](#browsing-stored-documents)
+7. [Scan History](#scan-history)
+8. [Settings](#settings)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -22,6 +23,7 @@ This guide walks you through every feature of the Document Scraper application. 
 Open the application in your web browser. You'll see the main scanning page with a URL input field, options for how to scan, and a "Start Scanning" button.
 
 The navigation links at the top right let you access:
+- **Documents** - Search and browse documents you've stored in MongoDB (see [Browsing Stored Documents](#browsing-stored-documents))
 - **History** - View past scans
 - **Settings** - Configure the application
 
@@ -202,6 +204,37 @@ To set up AI summarization:
 
 ---
 
+## Browsing Stored Documents
+
+Click **Documents** in the top navigation to search through everything you've stored in MongoDB across all past scans.
+
+### Choosing a Scan
+
+The **Scan** dropdown at the top lists every scan that has documents in MongoDB, along with how many documents each contains. Pick one to load its documents.
+
+### Summarization Status
+
+Once a scan is selected, a status bar appears showing AI-summary progress for that scan — e.g. *"42 of 60 summarized, 3 failed"*. Two action buttons can appear depending on state:
+
+- **Summarize** - Runs AI summarization on any documents that don't yet have a summary. Hidden if everything is already summarized.
+- **Retry Failed** - Resets the failure flag on any documents that previously errored and runs summarization on them again. Useful after fixing your AI key or switching models. Click the failure count to expand a panel showing the specific error message for each failed document.
+
+If you haven't configured AI summarization in Settings, these buttons stay hidden.
+
+### Searching
+
+The search box matches against **filename, extracted text content, summary, short summary, keywords, and title** — anything that's been indexed for that document. Press Enter or click **Search** to run the query.
+
+The **type filter** dropdown next to it limits results to a single file extension (PDF, DOCX, XLSX, etc.).
+
+Results show the document title (from AI summary if available, otherwise the filename), a short summary, the keywords, and the source URL. Click any row to open the full document detail in a modal, where you can read the full summary and extracted text, copy the source link, or delete the document.
+
+### Exporting
+
+The **Export to CSV** button (next to the search button) downloads a CSV of every document in the currently-selected scan, including filename, source URL, file size, extracted-text length, summary, short summary, keywords, document type, and timestamps. Useful for sharing scan results outside the app.
+
+---
+
 ## Scan History
 
 Click **History** in the top navigation to see a record of all your past scans. The table shows:
@@ -241,8 +274,8 @@ Access settings by clicking the gear icon in the navigation bar. All changes req
 
 | Setting | What it controls | Default |
 |---|---|---|
-| **Default Crawl Depth** | The starting depth when "Follow Internal Links" is selected | 2 levels |
-| **Maximum Crawl Depth** | The deepest you can set the crawl depth | 5 levels |
+| **Default Crawl Depth** | The starting depth when "Follow Internal Links" is selected | 5 levels |
+| **Maximum Crawl Depth** | The deepest you can set the crawl depth | 10 levels |
 | **Scan History Limit** | How many past scans to keep in the history | 20 scans |
 
 ### MongoDB Storage
@@ -283,6 +316,28 @@ The server address in your connection URI may be wrong, or the server may be on 
 
 ### Documents show as "Not accessible"
 The website may be blocking automated downloads, or the files may have been moved or deleted. Try the **Retry** button in the scan summary - sometimes temporary issues resolve themselves.
+
+### OCR isn't working (image-only PDFs come back blank)
+Image-only PDFs (scans, photos of pages) need OCR to extract text. The app uses [Stirling-PDF](https://github.com/Stirling-Tools/Stirling-PDF) running in a Docker container, and `scripts/run.sh` starts it for you. If OCR is silently producing empty text:
+
+- Make sure Docker is installed and the daemon is running: `docker ps` should succeed.
+- Check the container: `docker ps --filter name=stirling-pdf` should show it as `Up (healthy)`.
+- On first run, the container can take 30–60 seconds to become ready; `scripts/run.sh` waits up to 180 seconds before warning.
+- If something else is using port 8080, edit `STIRLING_PORT` in `scripts/run.sh`.
+- View container logs with `docker logs stirling-pdf` for specific errors.
+
+### "Browser error" while scanning JavaScript-heavy pages
+The scanner falls back to a headless Chromium browser via Playwright for pages that load content with JavaScript. If you see "Browser error" messages in scan results, the Chromium binary may be missing. Activate the virtualenv and run:
+
+```bash
+playwright install chromium
+```
+
+### AI summaries are stuck at "pending" or never appear
+- Open **Settings** and confirm the **API URL**, **API Key**, and **Model** are all filled in. All three are required.
+- For OpenAI-compatible endpoints, your model name must match what your provider exposes (e.g. `gpt-5.4`, not `gpt-5`).
+- If most documents went to "Failed" status, open the **Documents** page, select the scan, click the failure count to view the specific error, fix the cause (often an invalid key or model name), then click **Retry Failed**.
+- Summarization runs in the background after a MongoDB download completes; you don't need to keep the progress dialog open.
 
 ### Scan seems stuck or slow
 - Try reducing the **Concurrent Requests** setting if the target website is slow

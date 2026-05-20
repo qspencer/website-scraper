@@ -1,8 +1,18 @@
 # Document Scraper - Architecture Documentation
 
+> **Status note (2026-05-19).** This document was first written before MongoDB storage,
+> AI summarization, Stirling-PDF OCR, the Documents page, and persistent scan history
+> were added. Several sections below (project tree, component list, architecture diagram,
+> endpoint table, scan_history note) have been brought current. The data-flow narratives
+> for scraping and downloading still hold. The README and the live `/docs` (Swagger UI)
+> remain the most up-to-date sources for the user-facing feature list and the API surface.
+
 ## Overview
 
-Document Scraper is a Python web application that scans websites for linked documents, displays a preview of found files, and allows users to download selected documents to a specified location.
+Document Scraper is a Python web application that scans websites for linked documents,
+displays a preview of found files, and lets users either download them to a local
+directory or store them in MongoDB (with full-text search and optional AI summaries).
+It is a single-user local utility — no authentication, no multi-tenancy.
 
 ## Tech Stack
 
@@ -24,86 +34,93 @@ Document Scraper is a Python web application that scans websites for linked docu
 ```
 website-scraper/
 ├── app/
-│   ├── __init__.py
-│   ├── main.py                 # FastAPI application entry point
+│   ├── main.py                          # FastAPI app + lifespan (session sweeper)
 │   ├── core/
-│   │   ├── config.py           # Application settings (Pydantic)
-│   │   ├── constants.py        # File extensions, enums, display names
-│   │   ├── database.py         # SQLite database for persistence
-│   │   └── logging_config.py   # Centralized logging configuration
-│   ├── api/
-│   │   └── routes/
-│   │       ├── scraper.py      # Scraping API endpoints
-│   │       ├── downloads.py    # Download API endpoints
-│   │       └── settings.py     # Settings API endpoints
+│   │   ├── config.py                    # Pydantic settings (env-overridable)
+│   │   ├── constants.py                 # File extensions, enums, display names
+│   │   ├── database.py                  # SQLite persistence (settings + scan_history)
+│   │   └── logging_config.py            # Rotating file + console logging
+│   ├── api/routes/
+│   │   ├── scraper.py                   # Scan / continue / retry / cancel endpoints
+│   │   ├── downloads.py                 # File-system + MongoDB + summarization endpoints
+│   │   ├── settings.py                  # Settings GET/PUT/reset (masks secrets)
+│   │   └── history.py                   # Scan history endpoints
 │   ├── schemas/
-│   │   ├── document.py         # DocumentInfo, DownloadProgress models
-│   │   └── scrape.py           # Request/response models
+│   │   ├── document.py                  # DocumentInfo, DownloadProgress models
+│   │   └── scrape.py                    # Request/response models
 │   ├── services/
-│   │   ├── scraper_service.py  # Core scraping logic
-│   │   ├── crawler_service.py  # Multi-page crawling
-│   │   ├── browser_service.py  # Playwright browser for JS rendering
-│   │   ├── download_service.py # File download handling
-│   │   └── settings_service.py # Runtime settings with persistence
+│   │   ├── scraper_service.py           # Core scraping logic
+│   │   ├── crawler_service.py           # Multi-page BFS crawling
+│   │   ├── browser_service.py           # Playwright fallback for JS pages
+│   │   ├── download_service.py          # Local-disk download streaming
+│   │   ├── mongodb_service.py           # MongoDB+GridFS document storage
+│   │   ├── text_extraction_service.py   # PDF / DOCX / XLSX / TXT extraction
+│   │   ├── stirling_pdf_service.py      # Stirling-PDF OCR fallback
+│   │   ├── ai_summarization_service.py  # LLM summarization (Anthropic/OpenAI/compat)
+│   │   ├── settings_service.py          # Runtime settings (SQLite-backed singleton)
+│   │   ├── history_service.py           # scan_history persistence
+│   │   └── background_tasks.py          # Tracks fire-and-forget asyncio tasks
 │   ├── utils/
-│   │   ├── url_utils.py        # URL validation, normalization
-│   │   └── file_utils.py       # File size formatting, path validation
+│   │   ├── url_utils.py                 # URL validation, normalization
+│   │   ├── file_utils.py                # File size / path validation / sanitization
+│   │   └── document_types.py            # MIME / extension classification
 │   └── templates/
-│       ├── base.html           # Base template with Tailwind
-│       ├── index.html          # Main scraping interface
-│       ├── results.html        # Document preview and download
-│       └── settings.html       # Settings configuration page
+│       ├── base.html                    # Base template (Tailwind via CDN)
+│       ├── index.html                   # Main scan form
+│       ├── results.html                 # Document preview + download / MongoDB store
+│       ├── documents.html               # Search across MongoDB-stored documents
+│       ├── history.html                 # Past-scan list
+│       └── settings.html                # Settings page
+├── scripts/
+│   └── run.sh                           # Canonical entry point (venv + Stirling + uvicorn)
 ├── tests/
-│   ├── test_url_utils.py       # URL utility tests
-│   ├── test_file_utils.py      # File utility tests
-│   ├── test_scraper_service.py # Scraper service tests
-│   └── test_api.py             # API endpoint tests
-├── static/
-│   └── js/
-│       └── app.js              # Shared JavaScript utilities
+│   ├── test_*.py                        # 449 unit tests (mocks for Mongo / AI / browser)
+│   └── integration/                     # Opt-in integration tier (real backends)
+├── static/{css,js,images}/              # Favicon, small shared JS
 ├── docs/
-│   └── architecture.md         # This document
+│   ├── architecture.md                  # This document
+│   └── user-guide.md                    # Non-technical walkthrough
+├── logs/                                # Runtime logs (rotating, capped at ~30 MB)
 ├── requirements.txt
-└── venv/                       # Virtual environment
+└── README.md
 ```
 
 ## Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Web Browser                              │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐  │
-│  │  index.html │───▶│ results.html│───▶│  Download Files     │  │
-│  │  (Input)    │    │  (Preview)  │    │                     │  │
-│  └─────────────┘    └─────────────┘    └─────────────────────┘  │
-└────────────┬────────────────┬────────────────────┬──────────────┘
-             │                │                    │
-             │ SSE            │ SSE                │ SSE
-             ▼                ▼                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      FastAPI Application                         │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                     API Routes                            │   │
-│  │  POST /api/scrape/start      GET /api/scrape/progress     │   │
-│  │  GET  /api/scrape/results    POST /api/download/start     │   │
-│  │  GET  /api/download/progress POST /api/download/validate  │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                              │                                   │
-│  ┌───────────────────────────┴───────────────────────────────┐  │
-│  │                      Services Layer                        │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐    │  │
-│  │  │  Scraper    │  │  Crawler    │  │   Download      │    │  │
-│  │  │  Service    │  │  Service    │  │   Service       │    │  │
-│  │  └─────────────┘  └─────────────┘  └─────────────────┘    │  │
-│  └───────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      External Websites                           │
-│                  (Target URLs to scrape)                         │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                                Web Browser                                │
+│  index.html  →  results.html  →  documents.html / history.html / settings │
+└────────────────┬──────────────────────────────────────────┬───────────────┘
+                 │ HTTP + SSE                               │ HTTP
+                 ▼                                          ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          FastAPI Application                              │
+│  ┌────────────────────────────────────────────────────────────────────┐  │
+│  │  Routes:  scraper.py  downloads.py  settings.py  history.py        │  │
+│  └────────────────────────────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────────────────────────┐  │
+│  │  Services:                                                          │  │
+│  │    scraper_service  crawler_service  browser_service                │  │
+│  │    download_service mongodb_service  text_extraction_service        │  │
+│  │    stirling_pdf_service  ai_summarization_service                   │  │
+│  │    settings_service  history_service  background_tasks              │  │
+│  └────────────────────────────────────────────────────────────────────┘  │
+└────────┬─────────────┬───────────────────┬──────────────────┬────────────┘
+         │             │                   │                  │
+         ▼             ▼                   ▼                  ▼
+   external web   local disk         MongoDB / GridFS    Stirling-PDF
+   (target URLs)  (./downloads)      (localhost:27017)   docker container
+                                            │                  
+                                            ▼
+                                  AI provider (Anthropic /
+                                  OpenAI / compatible endpoint)
 ```
+
+Two persistence layers run alongside the in-memory session dicts:
+
+- **SQLite (`scraper.db`)** — user-configurable settings and scan history.
+- **MongoDB + GridFS** — optional; document binaries, extracted text, and AI summaries.
 
 ## Core Components
 
@@ -144,33 +161,60 @@ Implements multi-page crawling with depth control:
 
 ### 4. DownloadService (`app/services/download_service.py`)
 
-Manages file downloads:
+Manages local-disk file downloads:
 
 - Streams large files in chunks to avoid memory issues
 - Handles filename conflicts by appending numbers
 - Validates and sanitizes download paths
 - Provides progress updates via async generator
 
+### 5. MongoDBService (`app/services/mongodb_service.py`)
+
+Stores downloaded documents in MongoDB GridFS for later search and AI summarization:
+
+- `store_document()` writes bytes to GridFS and metadata to the `documents` collection
+- Idempotent on `(source_url, scan_url)` — re-storing the same document updates rather than duplicates
+- Text indexing (`text_search`) is created once at first write
+- `test_connection()` returns structured diagnostics for the Settings page's "Test Connection" button
+- Read APIs: `search_documents`, `get_document`, `get_document_file`, `delete_document`, `get_summary_stats`, `get_scan_summary_stats`, plus per-scan retry/reset helpers for failed summaries
+
+### 6. TextExtractionService (`app/services/text_extraction_service.py`)
+
+Extracts text from common document formats so it can be indexed and summarized:
+
+- PDF via PyPDF2 with Stirling-PDF OCR fallback (image-only PDFs)
+- DOCX via python-docx
+- XLSX via openpyxl (also produces structured per-sheet metadata)
+- PPTX via python-pptx
+- Plain text and CSV directly
+
+### 7. StirlingPDFService (`app/services/stirling_pdf_service.py`)
+
+Wraps the optional Stirling-PDF container (`ghcr.io/stirling-tools/stirling-pdf`) used for OCR on image-only PDFs. Gracefully degrades to `None` returns when the container isn't reachable.
+
+### 8. AISummarizationService (`app/services/ai_summarization_service.py`)
+
+Background summarizer that calls a user-configured AI endpoint (Anthropic, OpenAI, or any OpenAI-compatible URL — auto-detected from the URL). Produces a title, short summary, full summary, keywords, and document-type classification per stored document. Retries transient errors with exponential backoff; marks unrecoverable failures so the user can review and reset them from the Documents page.
+
+### 9. HistoryService (`app/services/history_service.py`)
+
+Persists summary stats for every completed scan (URL, mode, depth, pages, doc count, duration, error counts, total / largest / smallest file sizes) into the SQLite `scan_history` table for display on the History page.
+
+### 10. BackgroundTasks (`app/services/background_tasks.py`)
+
+Tracks fire-and-forget asyncio tasks (notably the periodic session sweeper and async summarization triggers) with strong references so they aren't GC'd mid-flight. Cancelled cleanly during the FastAPI lifespan shutdown.
+
 ## API Endpoints
 
-### Scraping
+The complete, always-current OpenAPI schema is served at `http://localhost:8000/docs` (interactive Swagger UI) and `http://localhost:8000/openapi.json`. The README has a high-level grouping of endpoints; the live `/docs` is authoritative. The endpoint surface is too large to enumerate accurately in static documentation — past attempts drifted within weeks of new features landing.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/scrape/start` | Initiates a scrape session, returns session ID |
-| POST | `/api/scrape/continue/{id}` | Continues a paused scan from where it left off |
-| GET | `/api/scrape/progress/{id}` | SSE stream of real-time progress updates |
-| GET | `/api/scrape/results/{id}` | Returns final list of found documents |
-| DELETE | `/api/scrape/cancel/{id}` | Cancels an ongoing scrape |
+Headline routes:
 
-### Downloads
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/download/validate-path` | Validates a download directory path |
-| POST | `/api/download/start` | Starts downloading selected documents |
-| GET | `/api/download/progress/{id}` | SSE stream of download progress |
-| DELETE | `/api/download/cancel/{id}` | Cancels ongoing downloads |
+- **Scanning** — `POST /api/scrape/start`, `GET /api/scrape/progress/{id}` (SSE), `POST /api/scrape/continue/{id}`, `GET /api/scrape/retry/{id}` (SSE), `DELETE /api/scrape/cancel/{id}`
+- **Local downloads** — `POST /api/download/validate-path`, `POST /api/download/start`, `GET /api/download/progress/{id}` (SSE)
+- **MongoDB** — `POST /api/download/mongodb/start`, `GET /api/download/mongodb/progress/{id}` (SSE), `GET /api/download/mongodb/scans`, `GET /api/download/mongodb/search`, `GET /api/download/mongodb/export/csv`, plus per-scan summarize / retry-failed endpoints
+- **Settings** — `GET/PUT /api/settings` (with `ai_api_key` and `mongodb_uri` masked in responses), `POST /api/settings/reset`
+- **History** — `GET /api/history`, `DELETE /api/history`
 
 ## Data Flow
 
@@ -223,10 +267,12 @@ Users can configure settings through the web UI at `/settings`. These settings a
 
 ## Database
 
-The application uses SQLite for persistent storage (`scraper.db`):
+The application uses SQLite for persistent storage (`scraper.db`, at the repo root by default):
 
-- **settings**: Key-value store for user-configurable settings
-- **scan_history**: (Reserved for future use) Track scan history
+- **settings** — key/value store for user-configurable settings (JSON-encoded values). Includes secrets (`ai_api_key`, `mongodb_uri`); these are masked in API responses but stored as-is locally.
+- **scan_history** — one row per completed scan, populated by `history_service.py`. Columns: `url`, `crawl_option`, `max_depth`, `scan_mode`, `document_filter`, `pages_scanned`, `documents_found`, `scan_error_count`, `document_error_count`, `duration_seconds`, `total_size_bytes`, `largest_file_name`/`size`, `smallest_file_name`/`size`, `started_at`, `completed_at`. The History page is a `SELECT … ORDER BY started_at DESC LIMIT N`, where N is the user-configurable `scan_history_limit`.
+
+Document bytes, extracted text, and AI summaries live in MongoDB (`documents` collection + GridFS), not SQLite.
 
 ## Document Type Filters
 
@@ -273,21 +319,13 @@ The application handles various error conditions:
 
 ## Running the Application
 
+The canonical entry point is `scripts/run.sh` (see the [README](../README.md) for what it does).
+For a manual launch:
+
 ```bash
-# Navigate to project directory
-cd /home/ubuntu/Dev/website-scraper
-
-# Activate virtual environment
 source venv/bin/activate
-
-# Install dependencies (first time only)
-pip install -r requirements.txt
-playwright install chromium
-
-# Start development server
-uvicorn app.main:app --host 0.0.0.0 --port 8001
-
-# Access at http://localhost:8001
+uvicorn app.main:app --reload --port 8000
+# Access at http://localhost:8000
 ```
 
 ## Running Tests
@@ -343,6 +381,6 @@ Potential enhancements for production use:
 5. **Proxy support**: Add configurable proxy settings
 6. **Export options**: Export document list to CSV/JSON
 7. **Scheduling**: Add scheduled/recurring scans
-8. **Docker**: Add Dockerfile for containerized deployment
+8. **App container image**: Add a Dockerfile for the app itself (Stirling-PDF already runs in a container; the app does not)
 9. **Custom headers**: Allow users to specify custom HTTP headers
 10. **Cookie support**: Handle sites that require authentication cookies

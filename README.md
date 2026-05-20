@@ -35,6 +35,12 @@ A web application that scans websites for downloadable documents, displays a pre
 - **Document Storage**: MongoDB with GridFS (optional)
 - **Text Extraction**: PyPDF2, python-docx, openpyxl
 
+## Prerequisites
+
+- **Python 3.12+**
+- **Docker** — optional, but required if you want OCR for image-only PDFs. `scripts/run.sh` automatically starts a [Stirling-PDF](https://github.com/Stirling-Tools/Stirling-PDF) container for OCR; without Docker the app still runs, only OCR is unavailable.
+- **MongoDB** — optional, for the document-storage / full-text-search / AI-summary features. The app works without it; you just won't see those features. [Installation guide](https://www.mongodb.com/docs/manual/installation/).
+
 ## Installation
 
 1. Clone the repository:
@@ -61,33 +67,39 @@ A web application that scans websites for downloadable documents, displays a pre
    playwright install chromium
    ```
 
-5. (Optional) Install MongoDB for document storage:
-   See the [MongoDB installation guide](https://www.mongodb.com/docs/manual/installation/).
-
 ## Usage
 
-1. Activate the virtual environment and start the server:
-   ```bash
-   source venv/bin/activate        # Linux/macOS
-   # or
-   venv\Scripts\activate           # Windows
+The recommended entry point is `scripts/run.sh`, which:
 
-   uvicorn app.main:app --reload --port 8001
-   ```
+- creates the venv if missing,
+- installs dependencies (skipped if `requirements.txt` is unchanged since the last run),
+- runs the test suite as a launch gate (use `--skip-tests` to bypass),
+- starts the Stirling-PDF container if Docker is available,
+- kills any prior uvicorn it started (matched by PID file — never an unrelated process), and
+- launches the app on `http://127.0.0.1:8000` in the background, logging to `logs/uvicorn.log`.
 
-2. Open your browser to `http://localhost:8001`
+```bash
+./scripts/run.sh                # full bootstrap + tests + launch
+./scripts/run.sh --skip-tests   # skip pytest, faster dev loop
+./scripts/run.sh --help
+```
 
-3. Enter a URL to scan, select a document type filter, and choose scan depth
+To stop the app, `kill` the PID printed by the script (or run `kill $(cat .uvicorn.pid)`).
 
-4. Review discovered documents and select files to download
+**Manual launch** (skips Stirling-PDF and the test gate):
 
-5. Choose a download destination (file system or MongoDB) and start the download
+```bash
+source venv/bin/activate
+uvicorn app.main:app --reload --port 8000
+```
+
+Then open your browser to `http://localhost:8000`.
 
 For a detailed walkthrough of every feature, see the [User Guide](docs/user-guide.md).
 
 ## Configuration
 
-Access the settings page at `http://localhost:8001/settings` to configure:
+Access the settings page at `http://localhost:8000/settings` to configure:
 
 ### Scan Performance
 
@@ -102,8 +114,8 @@ Access the settings page at `http://localhost:8001/settings` to configure:
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| Default Crawl Depth | Starting depth for "Follow Internal Links" | 2 |
-| Maximum Crawl Depth | Maximum selectable crawl depth | 5 |
+| Default Crawl Depth | Starting depth for "Follow Internal Links" | 5 |
+| Maximum Crawl Depth | Maximum selectable crawl depth | 10 |
 | Scan History Limit | Number of past scans to keep | 20 |
 
 ### MongoDB Storage (Optional)
@@ -160,7 +172,8 @@ website-scraper/
 │   └── utils/
 │       ├── url_utils.py                 # URL validation/normalization
 │       └── file_utils.py                # File size/path utilities
-├── tests/                               # Test suite (391 tests)
+├── tests/                               # Test suite (449 unit + small integration tier)
+│   └── integration/                     # Opt-in integration tier — see pytest.ini
 ├── docs/                                # Documentation
 │   ├── architecture.md                  # Technical architecture
 │   └── user-guide.md                    # Non-technical user guide
@@ -170,6 +183,10 @@ website-scraper/
 ```
 
 ## API Endpoints
+
+The complete, always-current OpenAPI schema is served at `http://localhost:8000/docs`
+(interactive Swagger UI) and `http://localhost:8000/openapi.json`. The tables below are
+a high-level grouping for orientation; the live `/docs` page is authoritative.
 
 ### Pages
 
@@ -191,7 +208,7 @@ website-scraper/
 | GET | `/api/scrape/results/{id}` | Get scan results |
 | GET | `/api/scrape/summary/{id}` | Get scan summary stats |
 | POST | `/api/scrape/continue/{id}` | Continue a paused scan |
-| POST | `/api/scrape/retry/{id}` | Retry failed pages and documents |
+| GET | `/api/scrape/retry/{id}` | SSE stream that retries failed pages and documents |
 | POST | `/api/scrape/calculate-sizes/{id}` | Calculate unknown file sizes |
 | DELETE | `/api/scrape/cancel/{id}` | Cancel a running scan |
 | DELETE | `/api/scrape/session/{id}` | Clean up session data |
@@ -219,9 +236,14 @@ website-scraper/
 | GET | `/api/download/mongodb/extensions` | Get file extensions (optionally by scan) |
 | GET | `/api/download/mongodb/document/{id}` | Get full document metadata |
 | DELETE | `/api/download/mongodb/document/{id}` | Delete a document |
+| GET | `/api/download/mongodb/scan/summary-stats` | Per-scan summary completion stats |
+| POST | `/api/download/mongodb/scan/summarize` | Trigger AI summarization for one scan |
+| POST | `/api/download/mongodb/scan/retry-failed` | Reset failed summaries for one scan and retry |
+| GET | `/api/download/mongodb/scan/failed-details` | Per-document failure details for one scan |
+| GET | `/api/download/mongodb/export/csv` | Export a scan's documents + metadata to CSV |
 | GET | `/api/download/mongodb/summarization/status` | Get summarization status and stats |
 | POST | `/api/download/mongodb/summarization/start` | Trigger summarization manually |
-| POST | `/api/download/mongodb/summarization/retry` | Retry failed summaries |
+| POST | `/api/download/mongodb/summarization/retry` | Retry failed summaries (all scans) |
 
 ### Settings & History
 

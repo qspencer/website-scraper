@@ -33,7 +33,8 @@ class Settings(BaseSettings):
     MONGODB_URI: str = "mongodb://localhost:27017"
     MONGODB_DATABASE: str = "document_scraper"
 
-    # AI summarization (Phase 3 prep)
+    # AI summarization. Defaults are empty; values are typically set via the Settings page
+    # at runtime (persisted to SQLite). The app degrades gracefully when AI is unconfigured.
     AI_API_URL: str = ""
     AI_API_KEY: str = ""
     AI_MODEL: str = ""
