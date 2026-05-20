@@ -493,7 +493,9 @@ class TestDocumentSearchEndpoints:
         data = resp.json()
         assert data["count"] == 1
         assert data["results"][0]["filename"] == "test.pdf"
-        mock_search.assert_called_once_with(query="", scan_url=None, extension=None, limit=50)
+        mock_search.assert_called_once_with(
+            query="", scan_url=None, extension=None, category=None, limit=50,
+        )
 
     @patch.object(mongodb_service, "search_documents")
     def test_search_with_query(self, mock_search, client):
@@ -502,7 +504,9 @@ class TestDocumentSearchEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert data["count"] == 0
-        mock_search.assert_called_once_with(query="finance", scan_url=None, extension=".pdf", limit=10)
+        mock_search.assert_called_once_with(
+            query="finance", scan_url=None, extension=".pdf", category=None, limit=10,
+        )
 
     @patch.object(mongodb_service, "search_documents")
     def test_search_with_scan_url(self, mock_search, client):
@@ -510,7 +514,7 @@ class TestDocumentSearchEndpoints:
         resp = client.get("/api/download/mongodb/search?scan_url=https://example.com")
         assert resp.status_code == 200
         mock_search.assert_called_once_with(
-            query="", scan_url="https://example.com", extension=None, limit=50,
+            query="", scan_url="https://example.com", extension=None, category=None, limit=50,
         )
 
     @patch.object(mongodb_service, "search_documents")
@@ -518,7 +522,31 @@ class TestDocumentSearchEndpoints:
         mock_search.return_value = []
         resp = client.get("/api/download/mongodb/search?limit=999")
         assert resp.status_code == 200
-        mock_search.assert_called_once_with(query="", scan_url=None, extension=None, limit=999)
+        mock_search.assert_called_once_with(
+            query="", scan_url=None, extension=None, category=None, limit=999,
+        )
+
+    @patch.object(mongodb_service, "search_documents")
+    def test_search_with_category(self, mock_search, client):
+        """M6: category filter passed through as-is."""
+        mock_search.return_value = []
+        resp = client.get("/api/download/mongodb/search?scan_url=https://x&category=Financial%20Reports")
+        assert resp.status_code == 200
+        mock_search.assert_called_once_with(
+            query="", scan_url="https://x", extension=None,
+            category="Financial Reports", limit=50,
+        )
+
+    @patch.object(mongodb_service, "search_documents")
+    def test_search_with_uncategorized_sentinel(self, mock_search, client):
+        """M6: __uncategorized__ sentinel passes through to the service layer."""
+        mock_search.return_value = []
+        resp = client.get("/api/download/mongodb/search?scan_url=https://x&category=__uncategorized__")
+        assert resp.status_code == 200
+        mock_search.assert_called_once_with(
+            query="", scan_url="https://x", extension=None,
+            category="__uncategorized__", limit=50,
+        )
 
     @patch.object(mongodb_service, "search_documents")
     def test_search_error(self, mock_search, client):

@@ -49,6 +49,41 @@
             </div>
         </div>
 
+        <!-- Categories bar (hidden until a category set exists for the selected scan) -->
+        <div id="categoriesBar" class="hidden mb-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
+            <div class="flex items-center justify-between gap-2 mb-2">
+                <div class="text-xs text-blue-800 font-medium">Categories</div>
+                <div class="flex items-center gap-2">
+                    <button id="categoriesEditBtn" onclick="toggleEditPanel()"
+                        class="text-xs text-blue-700 hover:text-blue-900" title="Edit categories">
+                        &#9998; Edit
+                    </button>
+                </div>
+            </div>
+            <div id="categoryChips" class="flex flex-wrap gap-2"></div>
+            <!-- Edit panel (hidden until ✎ is clicked) -->
+            <div id="categoryEditPanel" class="hidden mt-3 pt-3 border-t border-blue-200 space-y-2">
+                <div class="flex items-center justify-between gap-2 text-xs">
+                    <div class="text-blue-800">
+                        Rename, merge into another, or delete (documents become Uncategorized).
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="reRunCategorization()"
+                            class="px-2 py-1 text-blue-700 border border-blue-300 rounded hover:bg-blue-100"
+                            title="Re-run the full categorization pipeline; overwrites the current set">
+                            Re-run
+                        </button>
+                        <button onclick="clearCategorySet()"
+                            class="px-2 py-1 text-red-700 border border-red-300 rounded hover:bg-red-50"
+                            title="Drop the category set entirely; all documents become Uncategorized">
+                            Drop all
+                        </button>
+                    </div>
+                </div>
+                <div id="categoryEditList" class="space-y-1"></div>
+            </div>
+        </div>
+
         <!-- Search controls (hidden until scan selected) -->
         <div id="searchControls" class="hidden">
             <div class="flex flex-col md:flex-row gap-3">
@@ -197,6 +232,10 @@
     let resultsPerPage = 50;  // default, overridden by settings
     let allResults = [];      // all search results
     let currentPage = 1;
+    let loadedCategorySet = null;  // {scan_url, categories, live_counts, uncategorized_count}
+    let selectedCategory = '';     // active category filter ('', a name, or '__uncategorized__')
+    // Mirror of mongodb_service.UNCATEGORIZED_SENTINEL — must match server-side string.
+    const UNCATEGORIZED_SENTINEL = '__uncategorized__';
 
     document.addEventListener('DOMContentLoaded', async () => {
         try {
@@ -255,6 +294,10 @@
         document.getElementById('pagination').classList.add('hidden');
         document.getElementById('searchQuery').value = '';
         document.getElementById('summarizationBar').classList.add('hidden');
+        document.getElementById('categoriesBar').classList.add('hidden');
+        document.getElementById('categoryEditPanel').classList.add('hidden');
+        loadedCategorySet = null;
+        selectedCategory = '';
 
         if (!selectedScanUrl) {
             document.getElementById('searchControls').classList.add('hidden');
@@ -264,6 +307,7 @@
         document.getElementById('searchControls').classList.remove('hidden');
         await loadExtensions(selectedScanUrl);
         await loadSummaryStats();
+        await loadCategorySet(selectedScanUrl);
         performSearch();
     }
 
@@ -586,6 +630,7 @@
             if (query) params.set('q', query);
             params.set('scan_url', selectedScanUrl);
             if (extension) params.set('extension', extension);
+            if (selectedCategory) params.set('category', selectedCategory);
             // Fetch all results for client-side pagination
             params.set('limit', '0');
 
@@ -744,9 +789,24 @@
             // Show title as heading if available, otherwise filename
             const heading = title || doc.filename;
 
+            // Category badge — clickable, sets the category filter when clicked.
+            // Only shown when a category is assigned; "Other" gets a muted style.
+            let categoryBadgeHTML = '';
+            if (doc.category) {
+                const isOther = doc.category === 'Other';
+                const badgeClass = isOther
+                    ? 'bg-gray-100 text-gray-600 italic'
+                    : 'bg-blue-100 text-blue-700';
+                categoryBadgeHTML =
+                    `<button type="button" onclick="event.stopPropagation(); setCategoryFilter('${escapeHtml(doc.category)}');"
+                        class="inline-block px-2 py-1 text-xs font-medium rounded ${badgeClass} hover:opacity-80 flex-shrink-0 mt-0.5"
+                        title="Filter to this category">${escapeHtml(doc.category)}</button>`;
+            }
+
             card.innerHTML = `
                 <div class="flex items-start gap-3">
                     <span class="inline-block px-2 py-1 text-xs font-bold rounded ${extColor} flex-shrink-0 mt-0.5">${escapeHtml(ext.toUpperCase())}</span>
+                    ${categoryBadgeHTML}
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center justify-between gap-2">
                             <h3 class="font-medium text-gray-800 truncate">${escapeHtml(heading)}</h3>
@@ -1254,13 +1314,237 @@
                 throw new Error(body.detail || `HTTP ${resp.status}`);
             }
             closeCategorizeModal();
-            // M6 will refresh per-doc badges + category chips here. For M5 we just
-            // re-fetch the summary stats so any UI cues based on them update.
+            // Refresh the categories bar so the new chips appear, and re-run the
+            // search so per-document badges show. summary-stats refresh is also kept
+            // because some UI cues (button disable state) depend on it.
             await loadSummaryStats();
+            await loadCategorySet(selectedScanUrl);
+            performSearch();
         } catch (e) {
             showCategorizeError(`Accept failed: ${e.message}`);
             btn.disabled = false;
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Categories bar + edit panel (M6)
+    // -----------------------------------------------------------------------
+
+    async function loadCategorySet(scanUrl) {
+        loadedCategorySet = null;
+        try {
+            const resp = await fetch(`/api/download/mongodb/categories?scan_url=${encodeURIComponent(scanUrl)}`);
+            if (resp.status === 404) {
+                document.getElementById('categoriesBar').classList.add('hidden');
+                return;
+            }
+            if (!resp.ok) {
+                console.error('Category set load failed:', resp.status);
+                document.getElementById('categoriesBar').classList.add('hidden');
+                return;
+            }
+            loadedCategorySet = await resp.json();
+            renderCategoriesBar();
+        } catch (e) {
+            console.error('loadCategorySet error:', e);
+            document.getElementById('categoriesBar').classList.add('hidden');
+        }
+    }
+
+    function renderCategoriesBar() {
+        if (!loadedCategorySet) {
+            document.getElementById('categoriesBar').classList.add('hidden');
+            return;
+        }
+        document.getElementById('categoriesBar').classList.remove('hidden');
+
+        const chips = document.getElementById('categoryChips');
+        chips.innerHTML = '';
+
+        // "All" chip — active when no filter is set.
+        chips.appendChild(_makeChip('All', '', selectedCategory === '', false));
+
+        // One chip per category, sorted by live count desc; Other last.
+        const liveCounts = loadedCategorySet.live_counts || {};
+        const entries = (loadedCategorySet.categories || []).map(c => ({
+            name: c.name, count: liveCounts[c.name] || 0,
+        }));
+        entries.sort((a, b) => b.count - a.count);
+        for (const { name, count } of entries) {
+            chips.appendChild(_makeChip(name, name, selectedCategory === name, name === 'Other', count));
+        }
+
+        // Uncategorized chip — only if there are any uncategorized docs.
+        const uncatCount = loadedCategorySet.uncategorized_count || 0;
+        if (uncatCount > 0) {
+            chips.appendChild(_makeChip(
+                'Uncategorized', UNCATEGORIZED_SENTINEL,
+                selectedCategory === UNCATEGORIZED_SENTINEL, true, uncatCount,
+            ));
+        }
+
+        renderEditPanel();
+    }
+
+    function _makeChip(label, value, active, muted, count) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const base = 'px-3 py-1 text-xs font-medium rounded-full border transition';
+        const tone = active
+            ? 'bg-blue-600 text-white border-blue-600'
+            : (muted
+                ? 'bg-white text-gray-600 border-gray-300 italic hover:bg-gray-50'
+                : 'bg-white text-blue-700 border-blue-300 hover:bg-blue-100');
+        btn.className = `${base} ${tone}`;
+        const countStr = (count !== undefined && count !== null) ? ` ${count}` : '';
+        btn.textContent = label + countStr;
+        btn.onclick = () => toggleCategoryFilter(value);
+        return btn;
+    }
+
+    function toggleCategoryFilter(value) {
+        // Click the same chip again to clear.
+        selectedCategory = (selectedCategory === value) ? '' : value;
+        renderCategoriesBar();
+        currentPage = 1;
+        performSearch();
+    }
+
+    // Called from category badges on individual document cards.
+    function setCategoryFilter(name) {
+        selectedCategory = name;
+        renderCategoriesBar();
+        currentPage = 1;
+        performSearch();
+    }
+
+    function toggleEditPanel() {
+        const panel = document.getElementById('categoryEditPanel');
+        panel.classList.toggle('hidden');
+        if (!panel.classList.contains('hidden')) {
+            renderEditPanel();
+        }
+    }
+
+    function renderEditPanel() {
+        const list = document.getElementById('categoryEditList');
+        if (!loadedCategorySet) {
+            list.innerHTML = '';
+            return;
+        }
+        const liveCounts = loadedCategorySet.live_counts || {};
+        const cats = (loadedCategorySet.categories || []).slice();
+        cats.sort((a, b) => (liveCounts[b.name] || 0) - (liveCounts[a.name] || 0));
+
+        list.innerHTML = '';
+        for (const c of cats) {
+            const count = liveCounts[c.name] || 0;
+            const row = document.createElement('div');
+            row.className = 'flex items-center justify-between gap-2 text-xs bg-white border border-blue-100 rounded px-2 py-1';
+            row.innerHTML = `
+                <div class="flex-1 min-w-0">
+                    <span class="font-medium text-gray-800">${escapeHtml(c.name)}</span>
+                    <span class="text-gray-500">— ${count} doc${count === 1 ? '' : 's'}</span>
+                </div>
+                <div class="flex items-center gap-1 flex-shrink-0">
+                    <button class="px-2 py-0.5 text-blue-700 hover:bg-blue-50 rounded"
+                        onclick="renameCategoryUI('${escapeHtml(c.name)}')">Rename</button>
+                    <button class="px-2 py-0.5 text-blue-700 hover:bg-blue-50 rounded"
+                        onclick="mergeCategoryUI('${escapeHtml(c.name)}')">Merge…</button>
+                    <button class="px-2 py-0.5 text-red-700 hover:bg-red-50 rounded"
+                        onclick="deleteCategoryUI('${escapeHtml(c.name)}')">Delete</button>
+                </div>
+            `;
+            list.appendChild(row);
+        }
+    }
+
+    async function _patchCategory(action, body) {
+        const resp = await fetch(`/api/download/mongodb/categories?scan_url=${encodeURIComponent(selectedScanUrl)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, ...body }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        return resp.json();
+    }
+
+    async function renameCategoryUI(oldName) {
+        const newName = (prompt(`Rename category "${oldName}" to:`, oldName) || '').trim();
+        if (!newName || newName === oldName) return;
+        try {
+            await _patchCategory('rename', { name: oldName, new_name: newName });
+            // If the renamed category was the active filter, follow the rename.
+            if (selectedCategory === oldName) selectedCategory = newName;
+            await loadCategorySet(selectedScanUrl);
+            performSearch();
+        } catch (e) {
+            alert(`Rename failed: ${e.message}`);
+        }
+    }
+
+    async function mergeCategoryUI(sourceName) {
+        const others = (loadedCategorySet.categories || [])
+            .map(c => c.name)
+            .filter(n => n !== sourceName);
+        if (others.length === 0) {
+            alert('No other category to merge into.');
+            return;
+        }
+        const target = (prompt(
+            `Merge "${sourceName}" into which category?\n\nOptions:\n  ${others.join('\n  ')}`,
+            others[0],
+        ) || '').trim();
+        if (!target || target === sourceName) return;
+        try {
+            await _patchCategory('merge', { name: sourceName, target });
+            // If the source was the active filter, follow it to the target.
+            if (selectedCategory === sourceName) selectedCategory = target;
+            await loadCategorySet(selectedScanUrl);
+            performSearch();
+        } catch (e) {
+            alert(`Merge failed: ${e.message}`);
+        }
+    }
+
+    async function deleteCategoryUI(name) {
+        if (!confirm(`Delete category "${name}"? Its documents will become Uncategorized (the category set itself stays).`)) return;
+        try {
+            await _patchCategory('delete', { name });
+            if (selectedCategory === name) selectedCategory = '';
+            await loadCategorySet(selectedScanUrl);
+            performSearch();
+        } catch (e) {
+            alert(`Delete failed: ${e.message}`);
+        }
+    }
+
+    async function clearCategorySet() {
+        if (!confirm('Drop the entire category set? Every document in this scan becomes Uncategorized. The pipeline can be re-run afterwards.')) return;
+        try {
+            const resp = await fetch(`/api/download/mongodb/categories?scan_url=${encodeURIComponent(selectedScanUrl)}`, {
+                method: 'DELETE',
+            });
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                throw new Error(err.detail || `HTTP ${resp.status}`);
+            }
+            selectedCategory = '';
+            loadedCategorySet = null;
+            document.getElementById('categoriesBar').classList.add('hidden');
+            performSearch();
+        } catch (e) {
+            alert(`Drop failed: ${e.message}`);
+        }
+    }
+
+    function reRunCategorization() {
+        if (!confirm('Re-run categorization? This will replace the current categories when you accept the new result.')) return;
+        document.getElementById('categoryEditPanel').classList.add('hidden');
+        openCategorizeModal();
     }
 
     // Safe for both text and attribute contexts: also escapes " and ' so the result

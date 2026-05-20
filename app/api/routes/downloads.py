@@ -479,14 +479,20 @@ async def search_mongodb_documents(
     q: str = "",
     scan_url: str = "",
     extension: str = "",
+    category: str = "",
     limit: int = 50,
 ):
-    """Search stored documents by text query and/or filters."""
+    """Search stored documents by text query and/or filters.
+
+    ``category`` accepts a category name, or the literal sentinel
+    ``__uncategorized__`` to match docs with no category assigned.
+    """
     try:
         results = mongodb_service.search_documents(
             query=q,
             scan_url=scan_url or None,
             extension=extension or None,
+            category=category or None,
             limit=min(limit, 1000) if limit > 0 else 1000,
         )
         return {"results": results, "count": len(results)}

@@ -318,13 +318,22 @@ def get_document_file(doc_id: str) -> Optional[bytes]:
         return None
 
 
+UNCATEGORIZED_SENTINEL = "__uncategorized__"
+
+
 def search_documents(
     query: str = "",
     scan_url: Optional[str] = None,
     extension: Optional[str] = None,
+    category: Optional[str] = None,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
-    """Search documents by text query and/or filters."""
+    """Search documents by text query and/or filters.
+
+    ``category`` semantics: a category name filters to docs in that category.
+    The literal value ``UNCATEGORIZED_SENTINEL`` matches docs with no category
+    set (None or missing field). Empty string / None means no filter.
+    """
     col = _get_collection()
 
     filter_dict: Dict[str, Any] = {}
@@ -337,6 +346,15 @@ def search_documents(
 
     if extension:
         filter_dict["extension"] = extension
+
+    if category:
+        if category == UNCATEGORIZED_SENTINEL:
+            filter_dict["$or"] = [
+                {"category": None},
+                {"category": {"$exists": False}},
+            ]
+        else:
+            filter_dict["category"] = category
 
     # If text search, sort by relevance; otherwise by date
     if query:
