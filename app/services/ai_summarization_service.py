@@ -17,46 +17,32 @@ itself was authentic. Specifically:
 
 Error messages returned via ``"error"`` keys are persisted to MongoDB and
 exposed via the per-scan failure-details endpoint, so they must not leak
-secrets — see ``_redact_url`` for the canonical sanitiser.
+secrets — see ``ai_client.redact_url`` for the canonical sanitiser.
+
+**Architecture note.** Provider detection, HTTP plumbing, retry logic, and URL
+redaction live in ``app.services.ai_client``. This module owns only the
+summarization-specific concerns: prompt construction, JSON validation against
+the expected summary shape, and the orchestration loop over pending documents.
+The categorization service shares the same ``ai_client`` primitives.
 """
 
 import asyncio
 import functools
 import json
-from typing import Dict, Any, Optional
-from urllib.parse import urlparse
-
-import aiohttp
+from typing import Any, Dict, Optional, Tuple
 
 from app.core.logging_config import get_logger
+from app.services import ai_client, mongodb_service
 from app.services.settings_service import runtime_settings
-from app.services import mongodb_service
 
 logger = get_logger(__name__)
-
-
-def _redact_url(url: str) -> str:
-    """Return scheme://host/path of ``url``, stripping any query string or fragment.
-
-    URLs reach user-facing error strings (persisted to MongoDB, shown on the
-    Documents page). Query strings can carry API tokens / session ids that we
-    don't want exposed there — log the full URL, but only show the host/path.
-    """
-    if not url:
-        return ""
-    try:
-        p = urlparse(url)
-        if not p.scheme or not p.netloc:
-            return ""  # malformed; don't echo back
-        return f"{p.scheme}://{p.netloc}{p.path or ''}"
-    except Exception:
-        return ""
 
 
 async def _run_sync(func, *args, **kwargs):
     """Run a synchronous function in a thread executor to avoid blocking the event loop."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+
 
 # Track whether a summarization task is currently running
 _running = False
@@ -106,13 +92,13 @@ def _build_user_prompt(filename: str, text: str) -> str:
 
 
 def _parse_ai_response(raw: str) -> Optional[Dict[str, Any]]:
-    """Parse the AI response JSON, handling markdown fences."""
+    """Parse a summary-shaped AI response. Returns the validated dict or None."""
     text = raw.strip()
     # Strip markdown code fences if present
     if text.startswith("```"):
         lines = text.split("\n")
         # Remove first line (```json or ```) and last line (```)
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [line for line in lines if not line.strip().startswith("```")]
         text = "\n".join(lines).strip()
 
     try:
@@ -121,7 +107,6 @@ def _parse_ai_response(raw: str) -> Optional[Dict[str, Any]]:
         logger.warning(f"Failed to parse AI response as JSON: {text[:200]}")
         return None
 
-    # Validate expected keys
     summary = data.get("summary")
     keywords = data.get("keywords", [])
     doc_type = data.get("document_type", "other")
@@ -144,170 +129,50 @@ def _parse_ai_response(raw: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def _detect_provider(api_url: str) -> str:
-    """Detect the AI provider from the API URL."""
-    url_lower = api_url.lower()
-    if "anthropic" in url_lower:
-        return "anthropic"
-    if "openai" in url_lower:
-        return "openai"
-    # Default to OpenAI-compatible format (most common for third-party providers)
-    return "openai"
+# ---------------------------------------------------------------------------
+# Backwards-compatibility shims.
+#
+# These names existed before the ai_client extraction and are still imported
+# directly by tests/test_ai_summarization.py. They now delegate to ai_client
+# but preserve the original signatures and the original return-shape contract
+# (summary dict from _call_ai_api_once, not the raw_text envelope).
+# ---------------------------------------------------------------------------
+
+_redact_url = ai_client.redact_url
+_detect_provider = ai_client.detect_provider
+_extract_response_text = ai_client.extract_response_text
+_is_retryable = ai_client.is_retryable
+_RETRYABLE_STATUS_CODES = ai_client.RETRYABLE_STATUS_CODES
+_MAX_RETRIES = ai_client.MAX_RETRIES
+_RETRY_DELAYS = ai_client.RETRY_DELAYS
 
 
 def _build_request(
     provider: str, model: str, api_key: str, filename: str, text: str,
     system_prompt: str = "",
-):
-    """Build provider-specific headers and body for the AI API call."""
-    user_message = _build_user_prompt(filename, text)
+) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    """Build provider-specific (headers, body) for a summarization call."""
+    user_prompt = _build_user_prompt(filename, text)
     prompt = system_prompt or SYSTEM_PROMPT
-
-    if provider == "anthropic":
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        }
-        body = {
-            "model": model,
-            "max_tokens": 1024,
-            "system": prompt,
-            "messages": [
-                {"role": "user", "content": user_message},
-            ],
-        }
-    else:
-        # OpenAI-compatible format
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-        body = {
-            "model": model,
-            "max_completion_tokens": 1024,
-            "messages": [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_message},
-            ],
-        }
-
-    return headers, body
-
-
-def _extract_response_text(provider: str, result: dict) -> str:
-    """Extract the text content from a provider-specific API response."""
-    if provider == "anthropic":
-        content = result.get("content", [])
-        if content and isinstance(content, list):
-            return content[0].get("text", "")
-    else:
-        # OpenAI-compatible format
-        choices = result.get("choices", [])
-        if choices and isinstance(choices, list):
-            message = choices[0].get("message", {})
-            return message.get("content", "")
-        # Also handle the newer responses API format
-        output = result.get("output_text", "")
-        if output:
-            return output
-
-    return ""
-
-
-# HTTP status codes worth retrying
-_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-
-# Max retries and backoff delays (seconds) for each attempt
-_MAX_RETRIES = 2
-_RETRY_DELAYS = [5, 15]
-
-
-def _is_retryable(result: Dict[str, Any]) -> bool:
-    """Check if a failed result is worth retrying."""
-    error = result.get("error", "")
-    # Retryable HTTP status codes
-    for code in _RETRYABLE_STATUS_CODES:
-        if f"HTTP {code}" in error:
-            return True
-    # Retryable network/timeout errors
-    if any(s in error for s in ("timed out", "Connection failed", "ServerDisconnectedError")):
-        return True
-    return False
+    return ai_client.build_chat_request(provider, model, api_key, user_prompt, prompt)
 
 
 async def _call_ai_api_once(
     provider: str, api_url: str, headers: dict, body: dict, filename: str,
 ) -> Dict[str, Any]:
-    """Make a single AI API call. Returns parsed result or {"error": ...}."""
-    model = body.get("model", "unknown")
-    timeout = aiohttp.ClientTimeout(total=60)
+    """Single API call + summary-shape JSON parsing.
 
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(api_url, json=body, headers=headers) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    # Collect diagnostic details from response headers
-                    details = [f"API returned HTTP {resp.status}"]
-                    request_id = (
-                        resp.headers.get("x-request-id")
-                        or resp.headers.get("request-id")
-                        or resp.headers.get("cf-ray")
-                    )
-                    if request_id:
-                        details.append(f"Request-ID: {request_id}")
-                    retry_after = resp.headers.get("retry-after")
-                    if retry_after:
-                        details.append(f"Retry-After: {retry_after}s")
-                    rate_remaining = resp.headers.get("x-ratelimit-remaining")
-                    if rate_remaining:
-                        details.append(f"Rate-limit remaining: {rate_remaining}")
-                    # Try to extract a structured error message from the body
-                    error_body = error_text[:500]
-                    try:
-                        error_json = json.loads(error_text)
-                        msg = (
-                            error_json.get("error", {}).get("message")
-                            or error_json.get("message")
-                            or error_json.get("detail")
-                        )
-                        if msg:
-                            error_body = str(msg)[:500]
-                    except (json.JSONDecodeError, AttributeError):
-                        pass
-                    details.append(f"Response: {error_body}")
-                    error_msg = " | ".join(details)
-                    logger.warning(f"AI API error for {filename}: {error_msg}")
-                    return {"error": error_msg}
-
-                result = await resp.json()
-
-        raw_text = _extract_response_text(provider, result)
-
-        if not raw_text:
-            logger.warning(f"AI API returned empty content for {filename}")
-            return {"error": "API returned empty response content"}
-
-        parsed = _parse_ai_response(raw_text)
-        if parsed is None:
-            logger.warning(f"Failed to parse AI response for {filename}: {raw_text[:200]}")
-            return {"error": f"Failed to parse response as JSON: {raw_text[:200]}"}
-
-        return parsed
-
-    except asyncio.TimeoutError:
-        logger.error(f"AI API call timed out for {filename} (url={api_url})")
-        return {"error": f"API call timed out after 60 seconds (URL: {_redact_url(api_url)}, model: {model})"}
-    except aiohttp.ClientConnectorError as e:
-        logger.error(f"AI API connection failed for {filename} (url={api_url}): {e}")
-        return {"error": f"Connection failed: {e} (URL: {_redact_url(api_url)})"}
-    except asyncio.CancelledError:
-        raise
-    except Exception as e:
-        error_type = type(e).__name__
-        logger.error(f"AI API call failed for {filename}: {e}")
-        return {"error": f"{error_type}: {str(e)[:300]}"}
+    Returns the parsed summary dict on success or {"error": ...} on failure.
+    """
+    raw_result = await ai_client.call_chat_once(provider, api_url, headers, body, label=filename)
+    if "error" in raw_result:
+        return raw_result
+    raw_text = raw_result["raw_text"]
+    parsed = _parse_ai_response(raw_text)
+    if parsed is None:
+        logger.warning(f"Failed to parse AI response for {filename}: {raw_text[:200]}")
+        return {"error": f"Failed to parse response as JSON: {raw_text[:200]}"}
+    return parsed
 
 
 async def _call_ai_api(
@@ -315,12 +180,11 @@ async def _call_ai_api(
 ) -> Dict[str, Any]:
     """Call the configured AI API to summarize a document, with automatic retry.
 
-    Retries up to 2 times for transient errors (429, 5xx, timeouts, connection errors)
-    with increasing backoff delays. Non-retryable errors (401, 400, parse failures)
-    fail immediately.
-
-    Returns a dict with either parsed result keys (title, summary, etc.)
-    or an "error" key describing what went wrong.
+    Returns a dict with either parsed summary keys (title, summary, etc.) or
+    an "error" key. The HTTP/parse step delegates to _call_ai_api_once (which
+    wraps ai_client.call_chat_once); the retry loop and settings read live here
+    so existing tests can patch runtime_settings and _call_ai_api_once locally.
+    The newer categorization service uses ai_client.call_chat directly instead.
     """
     api_url = runtime_settings.ai_api_url
     api_key = runtime_settings.ai_api_key
@@ -336,16 +200,13 @@ async def _call_ai_api(
     )
 
     result = await _call_ai_api_once(provider, api_url, headers, body, filename)
-
-    # If successful or non-retryable, return immediately
     if "error" not in result or not _is_retryable(result):
         return result
 
-    # Retry with backoff for transient errors
     for attempt in range(_MAX_RETRIES):
         delay = _RETRY_DELAYS[attempt]
 
-        # Use retry-after header if present and longer than our default
+        # Honor server-supplied Retry-After if larger than our default backoff.
         error_msg = result.get("error", "")
         if "Retry-After:" in error_msg:
             try:
@@ -361,13 +222,11 @@ async def _call_ai_api(
         await asyncio.sleep(delay)
 
         result = await _call_ai_api_once(provider, api_url, headers, body, filename)
-
         if "error" not in result or not _is_retryable(result):
             if "error" not in result:
                 logger.info(f"Retry succeeded for {filename} on attempt {attempt + 1}")
             return result
 
-    # All retries exhausted
     result["error"] = f"Failed after {_MAX_RETRIES + 1} attempts. Last error: {result['error']}"
     return result
 
@@ -384,7 +243,6 @@ async def summarize_pending_documents() -> Dict[str, int]:
         logger.info("Summarization already running, skipping")
         return {"processed": 0, "succeeded": 0, "failed": 0, "skipped": 0}
 
-    # Check if AI is configured
     if not runtime_settings.ai_api_url or not runtime_settings.ai_api_key or not runtime_settings.ai_model:
         logger.info("AI API not configured, skipping summarization")
         return {"processed": 0, "succeeded": 0, "failed": 0, "skipped": 0}

@@ -262,3 +262,68 @@ These three together close the chain attack. Do them in one commit.
 **Per-section audit reports** were produced by four sub-agents and form the source material for §§1–4 above. The detailed reports (with code excerpts and per-finding rationale beyond what this summary carries) are preserved in the sub-agent transcripts at `/tmp/claude-1000/.../tasks/*.output`. If a future session needs to dig deeper into any single finding, those transcripts are the unabridged record.
 
 **Baseline:** evaluation conducted against committed code at `e21a3ea`. The 10-file uncommitted working tree was treated as backlog (F5.1), not reviewed as shipped code. If those changes land, re-run the §1 + §2 audits over the affected files (`mongodb_service.py`, `ai_summarization_service.py`, `text_extraction_service.py`, `downloads.py`, `scraper.py`, `documents.html`, `results.html`) before treating them as evaluated.
+
+---
+
+## 8. Progress Status (as of 2026-05-20)
+
+Remediation work has run through six waves since the evaluation. All three P0s, every
+P1, and the substantive P2 cluster are closed. The evaluation is **paused for feature
+work**; what remains is polish and process items.
+
+### What's closed
+
+| Wave | Closed | Notes |
+|---|---|---|
+| 1 (P0) | F1.1, F1.2, F1.3, F1.8 | Chain attack neutralised. `escapeHtml` strengthened (now attribute-safe), inline `onchange` removed, `mongodb_uri` userinfo masked in `/api/settings` with round-trip protection, secret-leaking startup log line redacted. |
+| 1 (hygiene + CVE) | F1.5, F1.6, F3.1, F3.2, F3.7 | `python-pptx` added (`.pptx` extraction now works), CVE-affected dep floors bumped (app-runtime CVEs **21 → 0**), `run.sh` port-kill PID-matched, log redirect `>` → `>>`, `.uvicorn.pid` untracked. |
+| 2 (`run.sh` hardening + log rotation) | F3.3, F3.4, F3.5, F3.6, F3.9, F3.10, F3.13 | `trap` handler added, Stirling readiness 60 → 180 s, `--restart unless-stopped` (retroactively applied via `docker update`), `--skip-tests` flag, log rotation cap 50 → 30 MB, `=2.0.0` removed, image-tag mismatch detection. |
+| 3 (code-level P1) | F1.4, F1.7, F1.9 + F2.4 (knock-on) | Fire-and-forget tasks now strongly referenced via new `app/services/background_tasks.py`; periodic session sweeper in lifespan; one-time MongoDB index creation. Closes the leaked-coroutine pytest warning. |
+| 4 (test tier) | F2.1, F2.2, F2.3, F2.8 + new opt-in integration tier | `tests/integration/` with 7 real-backend tests (MongoDB GridFS, live OpenAI smoke, Stirling-PDF round-trip, real Chromium); pytest markers (`integration`/`live_ai`/`playwright`); pymongo close fixture eliminates teardown noise. Default suite still **449/0**; integration tier **7 passed, 1 skipped** (Chromium not installed on this host). |
+| 5 (docs) | F4.1, F4.2, F4.3, F4.4, F4.5, F4.6, F4.7, F4.8, F4.9, F4.10, F4.11 + F5.3 | README port mismatch fixed (8001 → 8000) and `scripts/run.sh` documented; Prerequisites section added; user-guide gained "Browsing Stored Documents" + three Troubleshooting subsections; `docs/architecture.md` brought current (status note, project tree, diagram, 10 components, schema notes); endpoint table + numeric defaults reconciled. |
+| 6 (code-level P2) | F1.10, F1.11, F1.12, F1.13, F1.14, F1.15 | Session store extracted (`app/services/session_store.py`) — routes-to-routes coupling gone; URL scheme allowlist (rejects `file://`, `ftp://`, etc.); AI error strings redact query strings; crawler hard caps (`MAX_VISITED_URLS=50_000`, `MAX_DOCUMENTS=100_000`); 7 `except: pass` sites narrowed (bandit B110 **7 → 0**); prompt-injection awareness documented in module docstring. |
+
+### What's still open (all P2/P3 polish)
+
+| ID | Sev | Item |
+|---|---|---|
+| F2.5 | P2 | Patch `asyncio.sleep` in two `TestSummarizePendingDocuments` tests — currently costs ~2 s of the 5.7 s suite. |
+| F2.6 | P2 | SSE download integration test (against `aiohttp.test_utils` fixture). |
+| F2.7 | P2 | Rename status-200-only tests as `test_*_smoke` for honesty. |
+| F2.9 | P3 | Single helper for DB redirection (`conftest.py` + `test_database.py`). |
+| F2.10 | P3 | Replace `asyncio.sleep` timing with explicit `Event` in `test_calculate_sizes.py`. |
+| F3.11 | P2 | Split `requirements-dev.txt` from `requirements.txt`. |
+| F3.12 | P2 | `settings.DATABASE_PATH` defaulting to `./data/scraper.db`. |
+| F3.15 | P3 | Add minimal `pyproject.toml`. |
+| F1.16 | P3 | `ruff check app/ --fix` (~23 auto-fixes). |
+| F1.17 | P3 | Rename `l` → `line` in `ai_summarization_service.py:76`. |
+| F1.19 | P3 | `host="0.0.0.0"` → `127.0.0.1` in `app/main.py` CLI fallback. |
+| F4.12 | P3 | Add one-line docstrings on Pydantic schemas / non-obvious setters (interrogate baseline 68%). |
+| F5.1 | done | Original in-flight diff was committed in `48a8f2e` ("updates from eval plan"). |
+| F5.2 | P2 | Decision needed: "re-open past scan" — is it a feature gap to fill, or accept as out-of-scope? |
+| F5.4 | process | Commit-message-body convention — adopt going forward. |
+| F5.5 | P3 | Add `CLAUDE.md`. (Distribution-mode `pyproject.toml`/Dockerfile decisions also belong here.) |
+
+### Snapshot metrics (2026-05-20 vs 2026-05-19 baseline)
+
+| Metric | Baseline | Now |
+|---|---|---|
+| pytest pass count | 449 | 449 (+ 7 integration when opted in) |
+| pytest warning count | 2 | **0** |
+| pytest teardown noise | reproducible `ValueError: I/O operation on closed file` | **gone** |
+| app-runtime CVE count (pip-audit on venv) | 21 | **0** (remaining 5 are toolchain — `pip` + ancient `py`) |
+| bandit B110 (`try/except: pass`) | 7 | **0** |
+| `ruff check app/` | 26 findings | 26 (unchanged — F1.16 deferred) |
+| Default suite runtime | 5.7 s | 5.9 s |
+| Lines of new shared infra | 0 | ~115 (`background_tasks.py` 49 + `session_store.py` 18 + integration `conftest.py` ~50) |
+
+### Resume cues for the next eval session
+
+- Closed items above don't need re-verification — they have committed, tested fixes.
+- Remaining P2/P3 are the natural pickup list. Suggested grouping when resuming:
+  1. **Test polish bundle**: F2.5 + F2.6 + F2.7 + F2.9 + F2.10 (~½ day).
+  2. **Packaging bundle**: F3.11 + F3.12 + F3.15 (~½ day; touches `requirements.txt`, `app/core/database.py`, repo root).
+  3. **Style bundle**: F1.16 + F1.17 + F1.19 + F4.12 (~1 hour; mostly `ruff --fix`).
+  4. **Process bundle**: F5.4 + F5.5 + decide F5.2.
+- Pre-flight checklist before resuming: `pytest` + `pytest -m integration` should both pass green; if not, investigate before touching new work.
+- The integration tier requires live MongoDB on `localhost:27017`, OpenAI key in `runtime_settings`, and Stirling-PDF on `localhost:8080` (started by `scripts/run.sh`). The Playwright test additionally needs `playwright install chromium`.
