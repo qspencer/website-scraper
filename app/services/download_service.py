@@ -79,8 +79,8 @@ class DownloadService:
             if os.path.exists(filepath):
                 try:
                     os.remove(filepath)
-                except Exception:
-                    pass
+                except OSError as cleanup_err:
+                    logger.debug(f"Could not remove partial download {filepath}: {cleanup_err}")
             return False, f"Connection error: {str(e)[:50]}", None
 
         except Exception as e:
@@ -88,8 +88,8 @@ class DownloadService:
             if os.path.exists(filepath):
                 try:
                     os.remove(filepath)
-                except Exception:
-                    pass
+                except OSError as cleanup_err:
+                    logger.debug(f"Could not remove partial download {filepath}: {cleanup_err}")
             return False, str(e)[:100], None
 
     async def download_batch(

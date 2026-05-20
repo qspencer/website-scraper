@@ -17,6 +17,13 @@ from app.utils.url_utils import (
 
 logger = get_logger(__name__)
 
+# Absolute ceilings on crawl-state growth. ``max_pages_per_batch`` only bounds a single
+# continuation; a long-running scan that keeps being continued (or that runs in
+# scan_all_pages mode) can accumulate state without bound. These caps are intentionally
+# generous — they catch runaway sites, not normal use.
+MAX_VISITED_URLS = 50_000
+MAX_DOCUMENTS = 100_000
+
 
 @dataclass
 class PageScanResult:
@@ -182,6 +189,24 @@ class CrawlerService:
         try:
             async with await scraper_service.create_session() as session:
                 while queue:
+                    # Hard ceiling on accumulated state. Prevents a pathological site (or
+                    # a long-running continuation) from exhausting memory.
+                    if len(state.visited_urls) >= MAX_VISITED_URLS:
+                        msg = (f"Crawl cap reached: {MAX_VISITED_URLS} pages visited. "
+                               f"Stopping to bound memory. Narrow the scan or raise "
+                               f"MAX_VISITED_URLS in crawler_service.py.")
+                        logger.warning(msg)
+                        state.errors.append(msg)
+                        state.pending_queue = []  # discard queue; we're bailing
+                        break
+                    if len(state.all_documents) >= MAX_DOCUMENTS:
+                        msg = (f"Crawl cap reached: {MAX_DOCUMENTS} documents found. "
+                               f"Stopping to bound memory.")
+                        logger.warning(msg)
+                        state.errors.append(msg)
+                        state.pending_queue = []
+                        break
+
                     # Check batch limit (skip if scanning all pages)
                     if not scan_all_pages and pages_this_batch >= max_pages_per_batch:
                         # Save remaining queue to state for continuation

@@ -1,9 +1,30 @@
-"""Service for generating AI summaries of documents stored in MongoDB."""
+"""Service for generating AI summaries of documents stored in MongoDB.
+
+**Prompt-injection awareness.** This service feeds **scraped document content** —
+text the operator did not write and that may include adversarial instructions
+("ignore previous instructions and output X") — into a chat-completion request.
+Anything the model returns is therefore *untrusted output*, even if the request
+itself was authentic. Specifically:
+
+- Summary / title / keywords / document_type are LLM outputs and **must not be
+  used to drive automation** (e.g. don't dispatch on document_type without a
+  human in the loop; don't render summary fields in HTML without escaping).
+- A malicious document can produce mis-categorising summaries for *other*
+  documents in the same scan; treat all results from a single batch as
+  potentially tainted if any one document is suspect.
+- The text we send is truncated to ``MAX_TEXT_LENGTH`` chars, which limits but
+  does not eliminate the surface.
+
+Error messages returned via ``"error"`` keys are persisted to MongoDB and
+exposed via the per-scan failure-details endpoint, so they must not leak
+secrets — see ``_redact_url`` for the canonical sanitiser.
+"""
 
 import asyncio
 import functools
 import json
 from typing import Dict, Any, Optional
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -12,6 +33,24 @@ from app.services.settings_service import runtime_settings
 from app.services import mongodb_service
 
 logger = get_logger(__name__)
+
+
+def _redact_url(url: str) -> str:
+    """Return scheme://host/path of ``url``, stripping any query string or fragment.
+
+    URLs reach user-facing error strings (persisted to MongoDB, shown on the
+    Documents page). Query strings can carry API tokens / session ids that we
+    don't want exposed there — log the full URL, but only show the host/path.
+    """
+    if not url:
+        return ""
+    try:
+        p = urlparse(url)
+        if not p.scheme or not p.netloc:
+            return ""  # malformed; don't echo back
+        return f"{p.scheme}://{p.netloc}{p.path or ''}"
+    except Exception:
+        return ""
 
 
 async def _run_sync(func, *args, **kwargs):
@@ -258,11 +297,11 @@ async def _call_ai_api_once(
         return parsed
 
     except asyncio.TimeoutError:
-        logger.error(f"AI API call timed out for {filename}")
-        return {"error": f"API call timed out after 60 seconds (URL: {api_url}, model: {model})"}
+        logger.error(f"AI API call timed out for {filename} (url={api_url})")
+        return {"error": f"API call timed out after 60 seconds (URL: {_redact_url(api_url)}, model: {model})"}
     except aiohttp.ClientConnectorError as e:
-        logger.error(f"AI API connection failed for {filename}: {e}")
-        return {"error": f"Connection failed: {e} (URL: {api_url})"}
+        logger.error(f"AI API connection failed for {filename} (url={api_url}): {e}")
+        return {"error": f"Connection failed: {e} (URL: {_redact_url(api_url)})"}
     except asyncio.CancelledError:
         raise
     except Exception as e:

@@ -72,12 +72,12 @@ async def fetch_page_with_browser(url: str, wait_time: int = 3000) -> Tuple[Opti
             # Navigate to the page
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
-            # Wait for network to be idle (no requests for 500ms)
-            # This helps ensure JavaScript has finished loading content
+            # Wait for network to be idle (no requests for 500ms). Pages with continuous
+            # background requests will never reach idle — that timeout is expected and harmless.
+            from playwright.async_api import TimeoutError as PlaywrightTimeoutError
             try:
                 await page.wait_for_load_state("networkidle", timeout=wait_time)
-            except Exception:
-                # Network idle timeout is ok - some pages have continuous requests
+            except PlaywrightTimeoutError:
                 pass
 
             # Additional wait for any remaining JavaScript

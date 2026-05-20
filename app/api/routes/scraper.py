@@ -68,8 +68,9 @@ def _save_scan_history(session: dict) -> None:
     except Exception as e:
         logger.error(f"Failed to save scan history: {e}", exc_info=True)
 
-# In-memory session storage (in production, use Redis or similar)
-scrape_sessions: Dict[str, dict] = {}
+# Session storage moved to app.services.session_store so neither route module
+# imports from the other. Re-exported here for backwards compatibility.
+from app.services.session_store import scrape_sessions  # noqa: E402,F401
 
 
 @router.post("/start", response_model=ScrapeStartResponse)

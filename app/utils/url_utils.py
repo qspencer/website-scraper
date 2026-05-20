@@ -1,4 +1,4 @@
-from urllib.parse import urlparse, urljoin, urldefrag, parse_qs, urlencode, urlunparse
+from urllib.parse import urlparse, urljoin, urldefrag, parse_qs, urlencode, urlunparse, unquote
 from typing import Optional, Tuple, Set
 import re
 
@@ -124,12 +124,8 @@ def get_filename_from_url(url: str) -> str:
     if "?" in filename:
         filename = filename.split("?")[0]
 
-    # Decode URL encoding
-    try:
-        from urllib.parse import unquote
-        filename = unquote(filename)
-    except Exception:
-        pass
+    # Decode percent-encoding (stdlib unquote is total — no exception path needed).
+    filename = unquote(filename)
 
     return filename or "unknown"
 

@@ -207,15 +207,17 @@ class ScraperService:
                     else:
                         logger.info(f"SIZE UNKNOWN (no Content-Length header) | {url}")
 
-                    # Update filename from Content-Disposition if available
+                    # Update filename from Content-Disposition if available. Best-effort
+                    # parse; a malformed header is non-fatal because we already have a
+                    # fallback filename derived from the URL.
                     content_disp = response.headers.get("Content-Disposition", "")
                     if "filename=" in content_disp:
                         try:
                             fn = content_disp.split("filename=")[1].strip('"\'')
                             if fn:
                                 doc_info.filename = fn
-                        except Exception:
-                            pass
+                        except (IndexError, AttributeError) as e:
+                            logger.debug(f"Could not parse Content-Disposition {content_disp!r}: {e}")
 
                     doc_info.is_accessible = True
                     logger.debug(f"File info retrieved: {filename} ({doc_info.file_size_display or 'unknown size'})")

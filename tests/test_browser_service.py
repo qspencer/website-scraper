@@ -141,10 +141,15 @@ class TestFetchPageWithBrowser:
         mock_context.close.assert_awaited_once()
 
     async def test_network_idle_timeout_is_ok(self):
-        """Network idle timeout should not fail the fetch."""
+        """Network idle timeout should not fail the fetch.
+
+        Uses the real Playwright TimeoutError — production catches that specific
+        type (post-Wave-6 narrowing); a generic Exception would now propagate.
+        """
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
         mock_page = MagicMock()
         mock_page.goto = AsyncMock()
-        mock_page.wait_for_load_state = AsyncMock(side_effect=Exception("Timeout"))
+        mock_page.wait_for_load_state = AsyncMock(side_effect=PlaywrightTimeoutError("Timeout"))
         mock_page.content = AsyncMock(return_value="<html>OK</html>")
 
         mock_context = MagicMock()

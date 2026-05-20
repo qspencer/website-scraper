@@ -54,7 +54,10 @@ def _ensure_indexes(force: bool = False):
     if _indexes_ensured and not force:
         return
     col = _get_collection()
-    # Drop old text index if it exists with different fields
+    # Drop old text index if it exists with different fields. Tolerates the case where
+    # the collection doesn't exist yet or pymongo fails to introspect — the create_index
+    # call below will then build it fresh.
+    from pymongo.errors import PyMongoError
     try:
         existing = col.index_information()
         if "text_search" in existing:
@@ -62,8 +65,8 @@ def _ensure_indexes(force: bool = False):
             if "title" not in weights or "short_summary" not in weights:
                 col.drop_index("text_search")
                 logger.info("Dropped old text_search index to rebuild with new fields")
-    except Exception:
-        pass
+    except PyMongoError as e:
+        logger.debug(f"Index introspection skipped: {e}")
     col.create_index(
         [("filename", "text"), ("extracted_text", "text"),
          ("summary", "text"), ("short_summary", "text"),
@@ -434,15 +437,17 @@ def retry_text_extraction(progress_callback=None) -> Dict[str, int]:
     if not docs:
         return stats
 
-    # Check if Stirling PDF is available for OCR fallback
+    # Check if Stirling PDF is available for OCR fallback. is_configured() probes the
+    # configured URL with a short timeout and returns False on any error; the bare
+    # try/except catches the import + any unexpected fallout from the probe itself.
     stirling_available = False
     try:
         from app.services import stirling_pdf_service
         stirling_available = stirling_pdf_service.is_configured()
         if stirling_available:
             logger.info("Stirling PDF available for OCR fallback")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Stirling PDF availability check failed: {e}")
 
     pdf_count = sum(1 for d in docs if d["extension"].lower() == ".pdf")
     non_pdf_count = stats["total"] - pdf_count

@@ -26,7 +26,7 @@ from app.services.background_tasks import track
 from app.services.text_extraction_service import extract_text
 from app.utils.file_utils import validate_download_path, ensure_directory_exists
 from app.services.settings_service import runtime_settings
-from app.api.routes.scraper import scrape_sessions
+from app.services.session_store import scrape_sessions, download_sessions  # noqa: F401 (re-export)
 
 logger = get_logger(__name__)
 
@@ -38,8 +38,7 @@ async def _run_sync(func, *args, **kwargs):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 
-# In-memory download session storage
-download_sessions: Dict[str, dict] = {}
+# download_sessions now lives in app.services.session_store; imported above for re-export.
 
 
 @router.post("/validate-path", response_model=PathValidationResponse)

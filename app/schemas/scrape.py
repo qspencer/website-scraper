@@ -20,10 +20,23 @@ class ScrapeRequest(BaseModel):
         if not v:
             raise ValueError("Please enter a website address")
 
-        if not v.startswith(("http://", "https://")):
+        # If the user typed a scheme, accept only http/https — block file://, javascript:,
+        # ftp://, etc., which the rest of the pipeline (aiohttp / Playwright) would otherwise
+        # happily try to fetch. If no scheme, we'll prepend https:// below.
+        if "://" in v:
+            scheme = v.split("://", 1)[0].lower()
+            if scheme not in ("http", "https"):
+                raise ValueError(
+                    "Only http:// and https:// addresses are supported"
+                )
+        else:
             v = "https://" + v
 
         parsed = urlparse(v)
+
+        # Defence in depth: confirm urlparse agrees the final scheme is http/https.
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("Only http:// and https:// addresses are supported")
 
         # Must have a hostname
         if not parsed.hostname:

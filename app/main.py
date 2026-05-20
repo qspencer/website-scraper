@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.core.constants import DocumentTypeFilter, CrawlDepthOption, FILTER_DISPLAY_NAMES
 from app.core.logging_config import setup_logging, get_logger
 from app.api.routes import scraper, downloads, settings as settings_routes, history
-from app.services import background_tasks
+from app.services import background_tasks, session_store
 from app.services.settings_service import runtime_settings
 
 # Initialize logging
@@ -53,8 +53,8 @@ async def _session_sweeper():
         try:
             await asyncio.sleep(SESSION_SWEEP_INTERVAL)
             now = time.time()
-            _sweep_session_dict("scrape_sessions", scraper.scrape_sessions, now)
-            _sweep_session_dict("download_sessions", downloads.download_sessions, now)
+            _sweep_session_dict("scrape_sessions", session_store.scrape_sessions, now)
+            _sweep_session_dict("download_sessions", session_store.download_sessions, now)
         except asyncio.CancelledError:
             raise
         except Exception:
