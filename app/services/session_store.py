@@ -14,3 +14,7 @@ from typing import Any, Dict
 
 scrape_sessions: Dict[str, Dict[str, Any]] = {}
 download_sessions: Dict[str, Dict[str, Any]] = {}
+# Categorization pipeline sessions. Same lifecycle as the other two — created at
+# kickoff, swept on TTL, deleted explicitly on accept. See
+# app.api.routes.categorize and app.services.categorization_service.
+categorize_sessions: Dict[str, Dict[str, Any]] = {}
