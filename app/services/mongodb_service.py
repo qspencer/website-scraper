@@ -158,6 +158,7 @@ def store_document(
     text_extraction_status: str = "pending",
     text_extraction_method: Optional[str] = None,
     text_extraction_error: Optional[str] = None,
+    original_filename: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
     Store a document in MongoDB using GridFS.
@@ -234,6 +235,9 @@ def store_document(
             # Content changed — old category no longer guaranteed to apply.
             "category": None,
             "categorized_at": None,
+            # Reclassification metadata: set when the file's actual format differs
+            # from the URL's extension. None on docs whose extension was correct.
+            "original_filename": original_filename,
         }
 
         col.update_one({"_id": existing["_id"]}, {"$set": update_fields})
@@ -277,6 +281,9 @@ def store_document(
         # Categorization fields (populated by app.services.categorization_service).
         "category": None,
         "categorized_at": None,
+        # Reclassification metadata: set when the file's actual format differs
+        # from the URL's extension. None on docs whose extension was correct.
+        "original_filename": original_filename,
     }
 
     result = col.insert_one(doc)
@@ -470,7 +477,8 @@ def retry_text_extraction(progress_callback=None) -> Dict[str, int]:
     """
     import time
     import gridfs
-    from app.services.text_extraction_service import extract_text
+    from app.services.text_extraction_service import extract_text_with_detection
+    from app.utils.document_types import get_document_type_label
 
     col = _get_collection()
     db = _get_db()
@@ -479,6 +487,10 @@ def retry_text_extraction(progress_callback=None) -> Dict[str, int]:
     docs = list(col.find(
         {
             "summary_status": {"$in": ["pending", "failed"]},
+            # Retry only the recoverable failure modes. "corrupt" means the bytes
+            # themselves are broken — retrying with Stirling/OCR won't help; the
+            # user has to re-download the file (which will re-run store_document
+            # and reset the status naturally).
             "text_extraction_status": {"$in": ["failed", "unsupported"]},
         },
         {"_id": 1, "filename": 1, "extension": 1, "gridfs_id": 1, "file_size_bytes": 1},
@@ -551,19 +563,24 @@ def retry_text_extraction(progress_callback=None) -> Dict[str, int]:
             bytes_processed += file_size
             continue
 
-        # Try standard extraction first
+        # Try standard extraction (with format detection — auto-reroutes when the
+        # claimed extension doesn't match the bytes' actual format).
         method = None
         extraction_error = ""
+        actual_ext = ext
         try:
-            text, status, extraction_error = extract_text(file_data, ext)
+            text, status, extraction_error, actual_ext = extract_text_with_detection(file_data, ext)
             if status == "complete":
-                method = "pypdf2" if ext == ".pdf" else "standard"
+                method = "pypdf2" if actual_ext.lower() == ".pdf" else "standard"
         except Exception as e:
             logger.warning(f"Standard extraction error for {filename}: {e}")
             text, status, extraction_error = "", "failed", str(e)
+            actual_ext = ext
 
-        # If standard extraction failed for PDFs, try Stirling PDF
-        if status != "complete" and ext == ".pdf" and stirling_available:
+        # If standard extraction failed for PDFs, try Stirling PDF.
+        # Use the actual detected extension — no point running Stirling OCR on a
+        # file we've now determined isn't really a PDF.
+        if status != "complete" and actual_ext.lower() == ".pdf" and stirling_available:
             # Fast path first: direct text extraction (~1 second)
             _report_progress(i, filename, file_size, "stirling_fast")
             fast_text = stirling_pdf_service.extract_text_direct(file_data)
@@ -594,17 +611,30 @@ def retry_text_extraction(progress_callback=None) -> Dict[str, int]:
         bytes_processed += file_size
 
         if status == "complete" and text and text.strip():
-            col.update_one(
-                {"_id": doc["_id"]},
-                {"$set": {
-                    "extracted_text": text.strip(),
-                    "text_extraction_status": "complete",
-                    "text_extraction_method": method,
-                    "text_extraction_error": None,
-                    "summary_status": "pending",
-                    "summary_error": None,
-                }},
-            )
+            update_fields = {
+                "extracted_text": text.strip(),
+                "text_extraction_status": "complete",
+                "text_extraction_method": method,
+                "text_extraction_error": None,
+                "summary_status": "pending",
+                "summary_error": None,
+            }
+            # If format detection reclassified this file, persist the corrected
+            # metadata and preserve the original filename for audit.
+            if actual_ext.lower() != ext:
+                stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+                new_filename = f"{stem}{actual_ext}"
+                update_fields.update({
+                    "filename": new_filename,
+                    "extension": actual_ext,
+                    "file_type_label": get_document_type_label(actual_ext),
+                    "original_filename": filename,
+                })
+                logger.info(
+                    f"[{i+1}/{stats['total']}] Reclassified: {filename} -> {new_filename} "
+                    f"({ext} → {actual_ext})"
+                )
+            col.update_one({"_id": doc["_id"]}, {"$set": update_fields})
             stats["succeeded"] += 1
             logger.info(f"[{i+1}/{stats['total']}] Re-extracted text for: {filename}")
         else:
@@ -623,13 +653,18 @@ def retry_text_extraction(progress_callback=None) -> Dict[str, int]:
 
 
 def mark_unsummarizable_documents() -> int:
-    """Mark pending documents that can't be summarized due to failed text extraction."""
+    """Mark pending documents that can't be summarized due to failed text extraction.
+
+    Includes documents whose text extraction status is ``corrupt`` so they don't
+    sit indefinitely in ``summary_status="pending"``. The corrupt distinction
+    is preserved in ``text_extraction_status`` for user diagnostics.
+    """
     col = _get_collection()
     result = col.update_many(
         {
             "summary_status": "pending",
             "$or": [
-                {"text_extraction_status": {"$in": ["failed", "unsupported"]}},
+                {"text_extraction_status": {"$in": ["failed", "unsupported", "corrupt"]}},
                 {"extracted_text": {"$in": [None, ""]}},
             ],
         },
@@ -818,6 +853,64 @@ def get_documents_for_export(scan_url: str) -> List[Dict[str, Any]]:
         doc["_id"] = str(doc["_id"])
         results.append(doc)
     return results
+
+
+def delete_scan(scan_url: str) -> Dict[str, int]:
+    """Cascade-delete everything MongoDB holds for a scan.
+
+    Removes per-document metadata, the underlying GridFS files, and the
+    persisted category set (if any). Returns a dict with counts:
+    ``{"documents": N, "gridfs_files": N, "category_set_deleted": 0|1}``.
+
+    Operations are best-effort and continue past individual failures so a
+    single broken GridFS reference doesn't strand the rest of a scan.
+    """
+    import gridfs
+    db = _get_db()
+    fs = gridfs.GridFS(db)
+    col = _get_collection()
+
+    # Project only the fields we need to enumerate and clean up.
+    cursor = col.find({"scan_url": scan_url}, {"_id": 1, "gridfs_id": 1, "filename": 1})
+
+    gridfs_deleted = 0
+    gridfs_failed = 0
+    doc_ids = []
+    for doc in cursor:
+        doc_ids.append(doc["_id"])
+        gid = doc.get("gridfs_id")
+        if not gid:
+            continue
+        try:
+            fs.delete(gid)
+            gridfs_deleted += 1
+        except gridfs.NoFile:
+            # GridFS file already missing — count as deleted for the caller's purposes
+            gridfs_deleted += 1
+        except Exception as e:
+            gridfs_failed += 1
+            logger.warning(f"Failed to delete GridFS file {gid} for {doc.get('filename')}: {e}")
+
+    docs_deleted = 0
+    if doc_ids:
+        result = col.delete_many({"_id": {"$in": doc_ids}})
+        docs_deleted = result.deleted_count
+
+    # Category set is a single document keyed by scan_url; idempotent.
+    cset_result = _categories_collection().delete_one({"scan_url": scan_url})
+    category_set_deleted = cset_result.deleted_count
+
+    logger.info(
+        f"delete_scan {scan_url}: {docs_deleted} docs, {gridfs_deleted} GridFS files"
+        + (f" ({gridfs_failed} failed)" if gridfs_failed else "")
+        + (", category set removed" if category_set_deleted else "")
+    )
+    return {
+        "documents": docs_deleted,
+        "gridfs_files": gridfs_deleted,
+        "gridfs_failed": gridfs_failed,
+        "category_set_deleted": category_set_deleted,
+    }
 
 
 def delete_document(doc_id: str) -> bool:

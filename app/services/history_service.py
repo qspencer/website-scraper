@@ -76,8 +76,27 @@ def get_history(limit: int = None) -> List[Dict[str, Any]]:
 
 
 def clear_history() -> None:
-    """Clear all scan history."""
+    """Clear all scan_history rows.
+
+    Note: does NOT touch MongoDB documents stored from those scans. Use
+    delete_scan_by_url() (or the per-scan delete endpoint) for cascade cleanup.
+    """
     with db.get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM scan_history")
     logger.info("Scan history cleared")
+
+
+def delete_scan_by_url(scan_url: str) -> int:
+    """Delete all scan_history rows matching ``scan_url``.
+
+    A single scan_url may have multiple history rows (e.g., the user scanned the
+    same site repeatedly). All matching rows are removed. Returns the count.
+    """
+    with db.get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM scan_history WHERE url = ?", (scan_url,))
+        deleted = cursor.rowcount
+    if deleted:
+        logger.info(f"Deleted {deleted} scan_history row(s) for {scan_url}")
+    return deleted

@@ -1,11 +1,115 @@
 """Service for extracting text from various document formats."""
 
 import io
-from typing import Tuple
+from typing import Optional, Tuple
 
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+class CorruptDocumentError(RuntimeError):
+    """Raised when a document's bytes are structurally invalid.
+
+    Signals to the dispatcher that the failure is in the file itself (truncated
+    download, wrong magic bytes, etc.) and that retrying with a different extractor
+    or OCR will not help. The caller should mark the document with status="corrupt"
+    so the retry loop skips it.
+    """
+
+
+def _classify_office_zip(file_data: bytes) -> Optional[str]:
+    """If file_data is a ZIP, look inside for Office Open XML content markers.
+
+    Returns ".docx", ".xlsx", ".pptx" if recognized, or None for a generic ZIP /
+    parse failure. Used by _detect_actual_format to distinguish ZIP-based formats.
+    """
+    import zipfile
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_data)) as zf:
+            names = set(zf.namelist())
+            if "word/document.xml" in names:
+                return ".docx"
+            if "xl/workbook.xml" in names:
+                return ".xlsx"
+            if "ppt/presentation.xml" in names:
+                return ".pptx"
+    except Exception:
+        pass
+    return None
+
+
+def _detect_actual_format(file_data: bytes) -> Optional[str]:
+    """Best-effort guess of a file's real format from its leading bytes.
+
+    Returns a canonical extension (with leading dot) when the format is recognized,
+    or None when it can't be determined. Used to recover from misnamed downloads
+    (e.g., a `.pdf` URL that actually served an HTML error page).
+    """
+    if not file_data:
+        return None
+    head = file_data[:512]
+
+    # Binary magic-byte signatures, most specific first.
+    if head.startswith(b"%PDF-"):
+        return ".pdf"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if head.startswith(b"\xFF\xD8\xFF"):
+        return ".jpg"
+    if head.startswith(b"GIF87a") or head.startswith(b"GIF89a"):
+        return ".gif"
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return ".webp"
+    if head.startswith(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"):
+        return ".doc"  # OLE compound — legacy .doc/.xls/.ppt all share this
+    if head.startswith(b"{\\rtf"):
+        return ".rtf"
+    if head.startswith(b"\x1f\x8b"):
+        return ".gz"
+    if head.startswith(b"Rar!\x1a\x07"):
+        return ".rar"
+    if head.startswith(b"PK\x03\x04"):
+        return _classify_office_zip(file_data) or ".zip"
+
+    # Text-like content: trim whitespace, lowercase, look for HTML/XML markers.
+    stripped = head.lstrip()
+    low = stripped[:64].lower()
+    if low.startswith(b"<!doctype html") or low.startswith(b"<html"):
+        return ".html"
+    if low.startswith(b"<?xml") or low.startswith(b"<svg"):
+        return ".xml"
+
+    # Plain text fallback: decode as UTF-8 with no NULs and mostly-printable bytes.
+    if b"\x00" not in head:
+        try:
+            head.decode("utf-8")
+            printable = sum(1 for b in head if b in (9, 10, 13) or 32 <= b < 127)
+            if printable >= len(head) * 0.85:
+                return ".txt"
+        except UnicodeDecodeError:
+            pass
+
+    return None
+
+
+def _validate_pdf_structure(file_data: bytes) -> Optional[str]:
+    """Cheap structural check for a PDF byte stream.
+
+    Returns None when the bytes look like a valid PDF, or a human-readable
+    diagnostic string when they don't. Catches the two common corruption modes:
+      - missing %PDF- magic header (file isn't a PDF at all)
+      - missing %%EOF trailer in the last 1024 bytes (truncated download)
+    Real parsing problems still surface later in PyPDF2.
+    """
+    if len(file_data) < 32:
+        return f"PDF file too small to be valid ({len(file_data)} bytes)"
+    if not file_data.startswith(b"%PDF-"):
+        return "PDF file is missing the %PDF- magic header (file may be misnamed or not a PDF)"
+    # The trailing %%EOF can be followed by up to a few bytes of whitespace; scan the tail.
+    if b"%%EOF" not in file_data[-1024:]:
+        return "PDF file is missing the %%EOF marker in its trailing bytes (file appears truncated; re-download may be needed)"
+    return None
 
 
 def extract_text(file_data: bytes, extension: str) -> Tuple[str, str, str]:
@@ -53,13 +157,69 @@ def extract_text(file_data: bytes, extension: str) -> Tuple[str, str, str]:
         else:
             logger.debug(f"No text content extracted from .{ext} file")
             return "", "failed", f"No text content found in .{ext} file"
+    except CorruptDocumentError as e:
+        # File itself is broken; OCR / format-fallback won't help. Caller routes to
+        # status="corrupt" so the retry loop skips it.
+        logger.warning(f"Corrupt .{ext} file: {e}")
+        return "", "corrupt", str(e)
     except Exception as e:
         logger.warning(f"Text extraction failed for .{ext}: {e}")
         return "", "failed", f"Extraction error: {e}"
 
 
+def extract_text_with_detection(
+    file_data: bytes, claimed_extension: str,
+) -> Tuple[str, str, str, str]:
+    """Like extract_text, but reroutes through the correct extractor when the
+    file's actual format doesn't match the claimed extension.
+
+    Returns ``(text, status, error, actual_extension)``. ``actual_extension`` is
+    the corrected extension (with leading dot) when reclassification happened,
+    or ``claimed_extension`` otherwise. Callers should use ``actual_extension``
+    to update persisted metadata (filename, extension, file_type_label).
+
+    Format detection is only attempted on the *failure* paths (status="corrupt"
+    or "failed") so happy-path extraction stays fast.
+    """
+    text, status, error = extract_text(file_data, claimed_extension)
+    if status in ("complete", "unsupported"):
+        return text, status, error, claimed_extension
+
+    actual = _detect_actual_format(file_data)
+    if not actual:
+        return text, status, error, claimed_extension
+
+    # Normalize for comparison: ".PDF" vs "pdf" etc.
+    claimed_norm = "." + claimed_extension.lower().lstrip(".")
+    if actual.lower() == claimed_norm:
+        # Same format, just genuinely broken bytes — no reroute possible.
+        return text, status, error, claimed_extension
+
+    # Different format detected — try extracting under that format instead.
+    new_text, new_status, new_error = extract_text(file_data, actual)
+    if new_status == "complete":
+        logger.info(
+            f"Reclassified file: claimed {claimed_extension}, actually {actual}; "
+            f"extracted {len(new_text)} chars under corrected format"
+        )
+        return new_text, new_status, "", actual
+
+    # Detection found a format but extraction under it didn't help either.
+    # Surface both pieces of info so the user understands what happened.
+    base = f"File claims to be {claimed_extension} but appears to actually be {actual}"
+    if new_status == "unsupported":
+        return "", "corrupt", f"{base} (no extractor for {actual} available)", claimed_extension
+    return "", "corrupt", f"{base}; extraction under {actual} also failed: {new_error}", claimed_extension
+
+
 def _extract_pdf(file_data: bytes) -> str:
-    """Extract text from a PDF file."""
+    """Extract text from a PDF file. Pre-validates structure to fail fast on
+    truncated or misidentified files (no point spending time in PyPDF2 / OCR on a
+    file that's missing its trailer)."""
+    diagnostic = _validate_pdf_structure(file_data)
+    if diagnostic:
+        raise CorruptDocumentError(diagnostic)
+
     from PyPDF2 import PdfReader
 
     reader = PdfReader(io.BytesIO(file_data))

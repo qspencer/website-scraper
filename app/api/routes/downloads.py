@@ -23,10 +23,11 @@ from app.services.download_service import download_service
 from app.services import mongodb_service
 from app.services import ai_summarization_service
 from app.services.background_tasks import track
-from app.services.text_extraction_service import extract_text
+from app.services.text_extraction_service import extract_text_with_detection
 from app.utils.file_utils import validate_download_path, ensure_directory_exists
 from app.services.settings_service import runtime_settings
-from app.services.session_store import scrape_sessions, download_sessions  # noqa: F401 (re-export)
+from app.services.session_store import scrape_sessions, download_sessions, categorize_sessions  # noqa: F401 (re-export)
+from app.services import history_service
 
 logger = get_logger(__name__)
 
@@ -306,15 +307,32 @@ async def mongodb_download_progress(session_id: str):
 
                             file_data = await response.read()
 
-                        # Extract text (run in thread to avoid blocking event loop)
-                        extracted_text, extraction_status, extraction_error = await _run_sync(
-                            extract_text, file_data, doc.extension
+                        # Extract text with format detection — when the claimed
+                        # extension doesn't match the bytes, reroute through the
+                        # right extractor and use the corrected extension downstream.
+                        extracted_text, extraction_status, extraction_error, actual_ext = await _run_sync(
+                            extract_text_with_detection, file_data, doc.extension
                         )
                         extraction_method = None
                         if extraction_status == "complete":
-                            extraction_method = "pypdf2" if doc.extension.lower() == ".pdf" else "standard"
+                            extraction_method = "pypdf2" if actual_ext.lower() == ".pdf" else "standard"
 
-                        # Determine content type
+                        # If the file was reclassified, correct filename + extension
+                        # before persisting. Original is preserved via original_filename.
+                        stored_filename = doc.filename
+                        stored_extension = doc.extension
+                        original_filename = None
+                        if actual_ext.lower() != doc.extension.lower():
+                            stem = doc.filename.rsplit(".", 1)[0] if "." in doc.filename else doc.filename
+                            stored_filename = f"{stem}{actual_ext}"
+                            stored_extension = actual_ext
+                            original_filename = doc.filename
+                            logger.info(
+                                f"Reclassified at download: {doc.filename} -> {stored_filename} "
+                                f"({doc.extension} → {actual_ext})"
+                            )
+
+                        # Determine content type from the (corrected) extension.
                         content_type_map = {
                             ".pdf": "application/pdf",
                             ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -323,15 +341,17 @@ async def mongodb_download_progress(session_id: str):
                             ".xls": "application/vnd.ms-excel",
                             ".txt": "text/plain",
                             ".csv": "text/csv",
+                            ".html": "text/html",
+                            ".xml": "application/xml",
                         }
-                        content_type = content_type_map.get(doc.extension.lower(), "application/octet-stream")
+                        content_type = content_type_map.get(stored_extension.lower(), "application/octet-stream")
 
                         # Store in MongoDB (run in thread to avoid blocking event loop)
                         doc_id, action = await _run_sync(
                             mongodb_service.store_document,
                             file_data=file_data,
-                            filename=doc.filename,
-                            extension=doc.extension,
+                            filename=stored_filename,
+                            extension=stored_extension,
                             source_url=doc.url,
                             source_page=doc.source_page,
                             scan_url=scan_url,
@@ -341,6 +361,7 @@ async def mongodb_download_progress(session_id: str):
                             text_extraction_status=extraction_status,
                             text_extraction_method=extraction_method,
                             text_extraction_error=extraction_error or None,
+                            original_filename=original_filename,
                         )
                         stored_ids.append(doc_id)
                         completed += 1
@@ -650,6 +671,66 @@ async def delete_document(doc_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found")
     return {"message": "Document deleted"}
+
+
+def _active_sessions_for_scan(scan_url: str) -> list:
+    """Return a list of (kind, session_id) tuples for any in-flight sessions
+    referencing this scan_url. Used to refuse delete-scan while work is in progress.
+    """
+    active = []
+    # scrape_sessions: scan URL is request.url (Pydantic AnyHttpUrl → str()).
+    for sid, s in scrape_sessions.items():
+        req = s.get("request")
+        if req is not None and str(getattr(req, "url", "")) == scan_url:
+            if s.get("status") not in ("complete", "error", "cancelled"):
+                active.append(("scrape", sid))
+    # download_sessions: only MongoDB downloads carry scan_url (filesystem ones don't).
+    for sid, s in download_sessions.items():
+        if s.get("scan_url") == scan_url and s.get("status") not in ("complete", "error", "cancelled"):
+            active.append(("download", sid))
+    # categorize_sessions: always carry scan_url.
+    for sid, s in categorize_sessions.items():
+        if s.get("scan_url") == scan_url and s.get("status") == "running":
+            active.append(("categorize", sid))
+    return active
+
+
+@router.delete("/mongodb/scan")
+async def delete_scan(scan_url: str = ""):
+    """Cascade-delete everything associated with a scan: scan_history row,
+    all MongoDB documents + their GridFS files, and the category set (if any).
+
+    Refuses (409) if any scrape / download / categorize session is currently
+    in flight for this scan_url — the caller should cancel those first.
+    """
+    scan_url = scan_url.strip()
+    if not scan_url:
+        raise HTTPException(status_code=400, detail="scan_url query parameter is required")
+
+    active = _active_sessions_for_scan(scan_url)
+    if active:
+        kinds = ", ".join(f"{kind}({sid[:8]})" for kind, sid in active)
+        raise HTTPException(
+            status_code=409,
+            detail=f"Refusing to delete scan while sessions are active: {kinds}. "
+                   "Cancel the in-flight operation(s) and try again.",
+        )
+
+    try:
+        mongo_counts = await _run_sync(mongodb_service.delete_scan, scan_url)
+        history_deleted = await _run_sync(history_service.delete_scan_by_url, scan_url)
+    except Exception as e:
+        logger.error(f"delete_scan failed for {scan_url}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Delete failed: {e}")
+
+    return {
+        "scan_url": scan_url,
+        "documents_deleted": mongo_counts["documents"],
+        "gridfs_files_deleted": mongo_counts["gridfs_files"],
+        "gridfs_files_failed": mongo_counts["gridfs_failed"],
+        "category_set_deleted": bool(mongo_counts["category_set_deleted"]),
+        "history_rows_deleted": history_deleted,
+    }
 
 
 @router.get("/mongodb/export/csv")

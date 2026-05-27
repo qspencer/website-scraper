@@ -10,8 +10,9 @@
                     id="clearHistoryBtn"
                     onclick="clearHistory()"
                     class="text-sm text-red-600 hover:text-red-800 transition hidden"
+                    title="Removes scan_history rows only — does NOT delete documents stored in MongoDB. Use the trash icon next to a scan to fully delete it."
                 >
-                    Clear History
+                    Clear History List
                 </button>
                 <a href="/" class="text-blue-600 hover:text-blue-800 text-sm">Back to Scanner</a>
             </div>
@@ -46,6 +47,7 @@
                         <th class="py-3 px-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-right">Time</th>
                         <th class="py-3 px-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-right">Errors</th>
                         <th class="py-3 px-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-right">Total Size</th>
+                        <th class="py-3 px-3 text-xs font-semibold text-gray-500 uppercase tracking-wide text-center w-12"></th>
                     </tr>
                 </thead>
                 <tbody id="historyBody"></tbody>
@@ -126,9 +128,42 @@
                 <td class="py-3 px-3 text-right text-gray-600">${duration}</td>
                 <td class="py-3 px-3 text-right ${errors > 0 ? 'text-red-600' : 'text-gray-400'}">${errors}</td>
                 <td class="py-3 px-3 text-right text-gray-600">${totalSize}</td>
+                <td class="py-3 px-3 text-center">
+                    <button
+                        title="Delete this scan and all its stored documents"
+                        class="text-gray-400 hover:text-red-600 transition"
+                        onclick="event.stopPropagation(); deleteScan('${encodeURIComponent(scan.url)}', ${scan.documents_found || 0});"
+                    >&#128465;</button>
+                </td>
             `;
             tbody.appendChild(row);
         });
+    }
+
+    async function deleteScan(encodedScanUrl, docCount) {
+        const scanUrl = decodeURIComponent(encodedScanUrl);
+        const msg = `Delete the scan of "${scanUrl}" and all ${docCount} of its stored documents? This cannot be undone.`;
+        if (!confirm(msg)) return;
+        try {
+            const resp = await fetch(
+                '/api/download/mongodb/scan?scan_url=' + encodedScanUrl,
+                { method: 'DELETE' }
+            );
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                alert(`Delete failed: ${err.detail || resp.statusText}`);
+                return;
+            }
+            const result = await resp.json();
+            alert(
+                `Deleted: ${result.documents_deleted} documents, ${result.gridfs_files_deleted} GridFS files` +
+                (result.category_set_deleted ? ', category set' : '') +
+                `, ${result.history_rows_deleted} history rows.`
+            );
+            loadHistory();  // refresh table
+        } catch (e) {
+            alert(`Delete failed: ${e.message}`);
+        }
     }
 
     function showDetail(scan) {

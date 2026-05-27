@@ -111,6 +111,106 @@ class TestExtractText:
         assert status == "failed"
         assert text == ""
 
+    def test_pdf_validation_rejects_missing_magic_bytes(self):
+        # Bytes don't start with %PDF- — could be an HTML error page mislabeled as .pdf
+        text, status, error = extract_text(b"<html>404 Not Found</html>" + b" " * 1024, ".pdf")
+        assert status == "corrupt"
+        assert "%PDF- magic" in error
+        assert text == ""
+
+    def test_pdf_validation_rejects_missing_eof_marker(self):
+        # Valid magic header but no %%EOF trailer — classic truncated download
+        truncated = b"%PDF-1.4\n%binary marker\n" + b"x" * 2048
+        text, status, error = extract_text(truncated, ".pdf")
+        assert status == "corrupt"
+        assert "%%EOF" in error
+        assert "truncated" in error.lower()
+
+    def test_pdf_validation_rejects_too_small(self):
+        text, status, error = extract_text(b"%PDF-1.4", ".pdf")
+        assert status == "corrupt"
+        assert "too small" in error.lower()
+
+    def test_pdf_validation_passes_for_minimal_valid_pdf(self):
+        # Minimal structure that passes the cheap pre-check (PyPDF2 will then try to parse;
+        # since it's not really a parseable PDF body, expect a real PyPDF2 error path).
+        from app.services.text_extraction_service import _validate_pdf_structure
+        body = b"%PDF-1.4\n" + b"placeholder body" * 100 + b"\n%%EOF\n"
+        assert _validate_pdf_structure(body) is None
+
+
+class TestFormatDetection:
+    """Tests for _detect_actual_format — magic-byte recognition for misnamed files."""
+
+    def test_detects_html(self):
+        from app.services.text_extraction_service import _detect_actual_format
+        assert _detect_actual_format(b"<!DOCTYPE html><html><body>x</body></html>") == ".html"
+        assert _detect_actual_format(b"  \n<html lang='en'>x</html>") == ".html"
+        assert _detect_actual_format(b"<HTML>x</HTML>") == ".html"
+
+    def test_detects_xml(self):
+        from app.services.text_extraction_service import _detect_actual_format
+        assert _detect_actual_format(b'<?xml version="1.0"?><a/>') == ".xml"
+        assert _detect_actual_format(b'<svg xmlns="...">') == ".xml"
+
+    def test_detects_pdf(self):
+        from app.services.text_extraction_service import _detect_actual_format
+        assert _detect_actual_format(b"%PDF-1.4\n...") == ".pdf"
+
+    def test_detects_image_formats(self):
+        from app.services.text_extraction_service import _detect_actual_format
+        assert _detect_actual_format(b"\x89PNG\r\n\x1a\n....") == ".png"
+        assert _detect_actual_format(b"\xFF\xD8\xFF\xE0....") == ".jpg"
+        assert _detect_actual_format(b"GIF87a....") == ".gif"
+        # WEBP needs RIFF header + WEBP marker at offset 8
+        assert _detect_actual_format(b"RIFF\x00\x00\x00\x00WEBPxxxx") == ".webp"
+
+    def test_detects_plain_text(self):
+        from app.services.text_extraction_service import _detect_actual_format
+        assert _detect_actual_format(b"hello world\nthis is plain text\n") == ".txt"
+
+    def test_detects_legacy_ole_compound(self):
+        from app.services.text_extraction_service import _detect_actual_format
+        # OLE compound magic (legacy .doc/.xls/.ppt)
+        assert _detect_actual_format(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1" + b"\x00" * 100) == ".doc"
+
+    def test_returns_none_for_unknown_binary(self):
+        from app.services.text_extraction_service import _detect_actual_format
+        # NUL bytes + non-magic-matching → unrecognized
+        assert _detect_actual_format(b"\x00\x01\x02\x03" * 100) is None
+
+    def test_returns_none_for_empty(self):
+        from app.services.text_extraction_service import _detect_actual_format
+        assert _detect_actual_format(b"") is None
+
+
+class TestExtractTextWithDetection:
+    """Tests for the auto-rerouting wrapper."""
+
+    def test_complete_extraction_passes_through_unchanged(self):
+        from app.services.text_extraction_service import extract_text_with_detection
+        # A real .txt file with the correct extension — no detection should fire
+        text, status, error, actual_ext = extract_text_with_detection(b"hello world", ".txt")
+        assert status == "complete"
+        assert text == "hello world"
+        assert actual_ext == ".txt"
+
+    def test_html_misnamed_as_pdf_gets_rerouted(self):
+        """The aar.org scenario: server returned HTML at a .pdf URL."""
+        from app.services.text_extraction_service import extract_text_with_detection
+        html_bytes = b"<!DOCTYPE html><html><body>This is actually HTML content</body></html>"
+        text, status, error, actual_ext = extract_text_with_detection(html_bytes, ".pdf")
+        assert status == "complete"
+        assert actual_ext == ".html"
+        assert "actually HTML content" in text
+
+    def test_truly_corrupt_pdf_stays_corrupt_when_no_reroute_available(self):
+        from app.services.text_extraction_service import extract_text_with_detection
+        # Random binary that doesn't match any recognized magic — no reroute possible
+        text, status, error, actual_ext = extract_text_with_detection(b"\x00" * 200, ".pdf")
+        assert status == "corrupt"
+        assert actual_ext == ".pdf"  # unchanged since detection returned None
+
     @patch("app.services.text_extraction_service._extract_docx")
     def test_docx_extraction(self, mock_docx):
         mock_docx.return_value = "Word document text"

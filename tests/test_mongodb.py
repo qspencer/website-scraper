@@ -1058,3 +1058,157 @@ class TestCategoryEditOperations:
         assert n == 4
         remaining = cats_col.update_one.call_args[0][1]["$set"]["categories"]
         assert [c["name"] for c in remaining] == ["Surviving"]
+
+
+class TestDeleteScanEndpoint:
+    """Tests for DELETE /api/download/mongodb/scan."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_session_stores(self):
+        # Ensure session dicts are empty so the active-session check doesn't
+        # leak state between tests.
+        from app.services.session_store import (
+            scrape_sessions, download_sessions, categorize_sessions,
+        )
+        scrape_sessions.clear()
+        download_sessions.clear()
+        categorize_sessions.clear()
+        yield
+        scrape_sessions.clear()
+        download_sessions.clear()
+        categorize_sessions.clear()
+
+    def test_missing_scan_url_returns_400(self, client):
+        resp = client.delete("/api/download/mongodb/scan?scan_url=")
+        assert resp.status_code == 400
+        assert "scan_url" in resp.json()["detail"]
+
+    @patch.object(mongodb_service, "delete_scan")
+    @patch("app.api.routes.downloads.history_service.delete_scan_by_url")
+    def test_happy_path_cascades_and_returns_counts(self, mock_hist, mock_mongo, client):
+        mock_mongo.return_value = {
+            "documents": 17, "gridfs_files": 17, "gridfs_failed": 0,
+            "category_set_deleted": 1,
+        }
+        mock_hist.return_value = 2
+        resp = client.delete("/api/download/mongodb/scan?scan_url=https://x.test/scan")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["documents_deleted"] == 17
+        assert body["gridfs_files_deleted"] == 17
+        assert body["category_set_deleted"] is True
+        assert body["history_rows_deleted"] == 2
+        mock_mongo.assert_called_once_with("https://x.test/scan")
+        mock_hist.assert_called_once_with("https://x.test/scan")
+
+    def test_refuses_409_with_active_scrape_session(self, client):
+        from app.services.session_store import scrape_sessions
+        request = MagicMock()
+        request.url = "https://x.test/scan"
+        scrape_sessions["s1"] = {"request": request, "status": "scanning"}
+        resp = client.delete("/api/download/mongodb/scan?scan_url=https://x.test/scan")
+        assert resp.status_code == 409
+        assert "scrape" in resp.json()["detail"]
+
+    def test_refuses_409_with_active_categorize_session(self, client):
+        from app.services.session_store import categorize_sessions
+        import asyncio
+        categorize_sessions["c1"] = {
+            "scan_url": "https://x.test/scan", "status": "running",
+            "queue": asyncio.Queue(), "result": None, "error": None, "task": None,
+        }
+        resp = client.delete("/api/download/mongodb/scan?scan_url=https://x.test/scan")
+        assert resp.status_code == 409
+        assert "categorize" in resp.json()["detail"]
+
+    @patch.object(mongodb_service, "delete_scan")
+    def test_ignores_completed_sessions(self, mock_mongo, client):
+        """Sessions whose status is complete/cancelled/error don't block deletion."""
+        from app.services.session_store import categorize_sessions
+        import asyncio
+        categorize_sessions["done"] = {
+            "scan_url": "https://x.test/scan", "status": "complete",
+            "queue": asyncio.Queue(), "result": None, "error": None, "task": None,
+        }
+        mock_mongo.return_value = {
+            "documents": 1, "gridfs_files": 1, "gridfs_failed": 0,
+            "category_set_deleted": 0,
+        }
+        with patch("app.api.routes.downloads.history_service.delete_scan_by_url",
+                   return_value=0):
+            resp = client.delete("/api/download/mongodb/scan?scan_url=https://x.test/scan")
+        assert resp.status_code == 200
+
+
+class TestDeleteScanService:
+    """Tests for mongodb_service.delete_scan (mocked Mongo)."""
+
+    def test_returns_counts_for_clean_delete(self):
+        docs = [
+            {"_id": ObjectId(), "gridfs_id": ObjectId(), "filename": "a.pdf"},
+            {"_id": ObjectId(), "gridfs_id": ObjectId(), "filename": "b.pdf"},
+        ]
+        docs_col = MagicMock()
+        docs_col.find.return_value = iter(docs)
+        docs_col.delete_many.return_value = MagicMock(deleted_count=2)
+        cats_col = MagicMock()
+        cats_col.delete_one.return_value = MagicMock(deleted_count=1)
+        db = MagicMock()
+        db.__getitem__.side_effect = lambda name: {
+            "documents": docs_col, "categories": cats_col,
+        }[name]
+        fs = MagicMock()
+
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_get_collection", return_value=docs_col), \
+             patch("gridfs.GridFS", return_value=fs):
+            result = mongodb_service.delete_scan("https://x.test/scan")
+
+        assert result["documents"] == 2
+        assert result["gridfs_files"] == 2
+        assert result["gridfs_failed"] == 0
+        assert result["category_set_deleted"] == 1
+        assert fs.delete.call_count == 2
+
+    def test_tolerates_missing_gridfs_file(self):
+        import gridfs
+        docs = [{"_id": ObjectId(), "gridfs_id": ObjectId(), "filename": "ghost.pdf"}]
+        docs_col = MagicMock()
+        docs_col.find.return_value = iter(docs)
+        docs_col.delete_many.return_value = MagicMock(deleted_count=1)
+        cats_col = MagicMock()
+        cats_col.delete_one.return_value = MagicMock(deleted_count=0)
+        db = MagicMock()
+        db.__getitem__.side_effect = lambda name: {
+            "documents": docs_col, "categories": cats_col,
+        }[name]
+        fs = MagicMock()
+        fs.delete.side_effect = gridfs.NoFile()
+
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_get_collection", return_value=docs_col), \
+             patch("gridfs.GridFS", return_value=fs):
+            result = mongodb_service.delete_scan("https://x.test/scan")
+
+        # NoFile is counted as deleted (the file is already gone, which is the desired end state).
+        assert result["gridfs_files"] == 1
+        assert result["gridfs_failed"] == 0
+
+    def test_empty_scan_returns_zeros(self):
+        docs_col = MagicMock()
+        docs_col.find.return_value = iter([])
+        cats_col = MagicMock()
+        cats_col.delete_one.return_value = MagicMock(deleted_count=0)
+        db = MagicMock()
+        db.__getitem__.side_effect = lambda name: {
+            "documents": docs_col, "categories": cats_col,
+        }[name]
+        fs = MagicMock()
+        with patch.object(mongodb_service, "_get_db", return_value=db), \
+             patch.object(mongodb_service, "_get_collection", return_value=docs_col), \
+             patch("gridfs.GridFS", return_value=fs):
+            result = mongodb_service.delete_scan("https://nonexistent.test/scan")
+        assert result == {
+            "documents": 0, "gridfs_files": 0, "gridfs_failed": 0, "category_set_deleted": 0,
+        }
+        docs_col.delete_many.assert_not_called()
