@@ -250,8 +250,10 @@ class TestPropose:
 class TestAssignDocuments:
     @patch.object(cs.ai_client, "call_chat", new_callable=AsyncMock)
     async def test_batches_and_aggregates(self, mock_call):
-        # 120 docs at PHASE2_BATCH_SIZE=50 → 3 batches (50, 50, 20)
-        docs = _make_docs(120)
+        # Compute batches from the live constant so this test survives tuning changes.
+        n_docs = cs.PHASE2_BATCH_SIZE * 2 + 20  # ensures multiple batches w/ a partial last batch
+        expected_batches = (n_docs + cs.PHASE2_BATCH_SIZE - 1) // cs.PHASE2_BATCH_SIZE
+        docs = _make_docs(n_docs)
         categories = [{"name": "A", "description": "d"}, {"name": "B", "description": "d"}]
 
         def _respond(*args, **kwargs):
@@ -262,9 +264,9 @@ class TestAssignDocuments:
         mock_call.side_effect = _respond
 
         result = await cs.assign_documents(docs, categories)
-        assert len(result) == 120
+        assert len(result) == n_docs
         assert all(v == "A" for v in result.values())
-        assert mock_call.call_count == 3
+        assert mock_call.call_count == expected_batches
 
     @patch.object(cs.ai_client, "call_chat", new_callable=AsyncMock)
     async def test_failed_batch_buckets_to_other(self, mock_call):
@@ -277,7 +279,10 @@ class TestAssignDocuments:
 
     @patch.object(cs.ai_client, "call_chat", new_callable=AsyncMock)
     async def test_emits_progress_events(self, mock_call):
-        docs = _make_docs(75)  # 2 batches at PHASE2_BATCH_SIZE=50
+        # Pick a doc count that produces multiple batches against the current PHASE2_BATCH_SIZE.
+        n_docs = cs.PHASE2_BATCH_SIZE + cs.PHASE2_BATCH_SIZE // 2  # 1.5 batches
+        expected_batches = (n_docs + cs.PHASE2_BATCH_SIZE - 1) // cs.PHASE2_BATCH_SIZE
+        docs = _make_docs(n_docs)
         categories = [{"name": "A", "description": "d"}, {"name": "B", "description": "d"}]
         mock_call.side_effect = lambda *a, **k: _ai_assignments_response({"x": "A"})
 
@@ -287,9 +292,9 @@ class TestAssignDocuments:
 
         await cs.assign_documents(docs, categories, emit=collect)
         progress = [e for e in events if e[0] == "phase_progress"]
-        assert len(progress) == 2  # one per batch completion
-        assert progress[-1][1]["completed"] == 2
-        assert progress[-1][1]["total"] == 2
+        assert len(progress) == expected_batches  # one per batch completion
+        assert progress[-1][1]["completed"] == expected_batches
+        assert progress[-1][1]["total"] == expected_batches
 
 
 class TestRefineCategories:

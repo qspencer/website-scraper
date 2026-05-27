@@ -26,7 +26,7 @@ def extract_text(file_data: bytes, extension: str) -> Tuple[str, str, str]:
     extractors = {
         "pdf": _extract_pdf,
         "docx": _extract_docx,
-        "doc": _extract_docx,  # python-docx can sometimes handle .doc
+        "doc": _extract_doc,  # legacy binary .doc — needs Stirling-PDF (LibreOffice) conversion
         "pptx": _extract_pptx,
         "ppt": _extract_pptx,
         "xlsx": _extract_xlsx,
@@ -78,6 +78,31 @@ def _extract_docx(file_data: bytes) -> str:
     doc = Document(io.BytesIO(file_data))
     paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
     return "\n\n".join(paragraphs)
+
+
+def _extract_doc(file_data: bytes) -> str:
+    """Extract text from a legacy binary .doc file.
+
+    python-docx only handles Office Open XML (.docx), not the pre-2007 binary .doc
+    format. We convert .doc → PDF via Stirling-PDF (which uses LibreOffice headless),
+    then run the resulting PDF through the normal PDF text extractor. Raises a clear
+    RuntimeError when Stirling is unavailable so the dispatcher's error message
+    surfaces the real cause instead of "No text content found".
+    """
+    from app.services import stirling_pdf_service
+
+    if not stirling_pdf_service.is_configured():
+        raise RuntimeError(
+            "Cannot extract legacy .doc files without Stirling-PDF "
+            "(LibreOffice). Ensure the Stirling-PDF container is running "
+            "and stirling_pdf_url is set in Settings."
+        )
+
+    pdf_bytes = stirling_pdf_service.convert_to_pdf(file_data, "input.doc")
+    if not pdf_bytes:
+        raise RuntimeError("Stirling-PDF failed to convert .doc to PDF")
+
+    return _extract_pdf(pdf_bytes)
 
 
 def _extract_pptx(file_data: bytes) -> str:

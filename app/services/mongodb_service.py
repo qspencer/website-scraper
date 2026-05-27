@@ -807,6 +807,7 @@ def get_documents_for_export(scan_url: str) -> List[Dict[str, Any]]:
         "version_label": 1,
         "content_hash": 1,
         "extension": 1,
+        "category": 1,
     }
     cursor = col.find(
         {"scan_url": scan_url}, projection

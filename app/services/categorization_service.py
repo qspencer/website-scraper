@@ -38,7 +38,7 @@ logger = get_logger(__name__)
 
 ITERATION_CAP = 3                    # max passes through propose/assign before giving up
 PHASE1_SAMPLE_SIZE = 300             # cap on summaries sent to PROPOSE / REFINE
-PHASE2_BATCH_SIZE = 50               # docs per ASSIGN call
+PHASE2_BATCH_SIZE = 25               # docs per ASSIGN call (was 50; reduced to fit gpt-5.x under 60s timeout)
 PHASE2_CONCURRENCY = 2               # simultaneous ASSIGN calls
 SOFT_TOKEN_WARN = 100_000            # log warning if a call exceeds this
 HARD_TOKEN_CAP = 200_000             # refuse a call above this (catches runaway prompts)

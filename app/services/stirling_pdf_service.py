@@ -12,7 +12,8 @@ logger = get_logger(__name__)
 
 # Timeouts
 TEXT_EXTRACT_TIMEOUT = 30  # seconds - fast text extraction
-OCR_TIMEOUT = 600  # 10 minutes - OCR on large scanned PDFs can be very slow
+OCR_TIMEOUT = 1800  # 30 minutes - OCR on large/complex scanned PDFs can hit the prior 10min cap
+OFFICE_CONVERT_TIMEOUT = 120  # 2 minutes - office-to-PDF via LibreOffice headless
 
 
 def is_configured() -> bool:
@@ -155,6 +156,55 @@ def extract_text_via_ocr(file_data: bytes) -> Optional[str]:
 
     except Exception as e:
         logger.error(f"Failed to extract text from OCR'd PDF: {e}")
+        return None
+
+
+def convert_to_pdf(file_data: bytes, filename: str) -> Optional[bytes]:
+    """Convert an office document (e.g. legacy .doc) to PDF via Stirling-PDF.
+
+    Stirling uses LibreOffice headless under the hood, so it handles the binary .doc
+    format that python-docx cannot read. Returns the PDF bytes, or None on any failure
+    (Stirling unavailable, conversion failed, unsupported source format).
+
+    The returned PDF can then be fed through the normal PDF text-extraction chain
+    (PyPDF2 → Stirling OCR fallback) to recover the text.
+    """
+    url = runtime_settings.stirling_pdf_url
+    if not url:
+        return None
+
+    endpoint = f"{url}/api/v1/convert/file/pdf"
+
+    try:
+        resp = requests.post(
+            endpoint,
+            files={"fileInput": (filename, io.BytesIO(file_data), "application/octet-stream")},
+            timeout=OFFICE_CONVERT_TIMEOUT,
+        )
+
+        if resp.status_code != 200:
+            logger.warning(
+                f"Stirling office-to-PDF conversion returned HTTP {resp.status_code} "
+                f"for {filename}: {resp.text[:200]}"
+            )
+            return None
+
+        result = resp.content
+        if not result.startswith(b"%PDF"):
+            logger.warning(f"Stirling office-to-PDF returned non-PDF output for {filename}")
+            return None
+
+        logger.debug(f"Converted {filename} to PDF: {len(file_data)} -> {len(result)} bytes")
+        return result
+
+    except requests.Timeout:
+        logger.error(f"Stirling office-to-PDF conversion timed out for {filename}")
+        return None
+    except requests.ConnectionError as e:
+        logger.error(f"Cannot connect to Stirling PDF at {url}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Stirling office-to-PDF conversion failed for {filename}: {e}")
         return None
 
 

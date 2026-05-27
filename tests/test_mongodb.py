@@ -801,6 +801,7 @@ class TestCSVExport:
                 "file_type_label": "PDF Document",
                 "version_label": "v1",
                 "extension": ".pdf",
+                "category": "Financial Reports",
             },
             {
                 "_id": "def456",
@@ -811,6 +812,7 @@ class TestCSVExport:
                 "file_type_label": "Excel Spreadsheet",
                 "version_label": "v2",
                 "extension": ".xlsx",
+                "category": None,  # uncategorized — must produce an empty cell, not crash
             },
         ]
 
@@ -822,10 +824,13 @@ class TestCSVExport:
         lines = resp.text.strip().split("\n")
         assert len(lines) == 3  # header + 2 data rows
         assert "Document Title" in lines[0]
+        assert "Category" in lines[0]  # regression guard: M6 added category to the export
         # Rows sorted alphabetically by title (fallback to filename)
         # "data.xlsx" (no title, uses filename) sorts before "Quarterly Financial Report"
         assert "data.xlsx" in lines[1]
         assert "Quarterly Financial Report" in lines[2]
+        # Categorized doc's category appears in its row; uncategorized produces an empty cell
+        assert "Financial Reports" in lines[2]
 
     def test_export_csv_no_scan_url(self, client):
         resp = client.get("/api/download/mongodb/export/csv")

@@ -36,7 +36,7 @@ STIRLING_IMAGE="ghcr.io/stirling-tools/stirling-pdf:2.7.2-fat"
 STIRLING_NAME="stirling-pdf"
 STIRLING_PORT=8080
 STIRLING_CPUS=2
-STIRLING_MEMORY="2g"
+STIRLING_MEMORY="4g"
 # Cold start of the fat image can exceed 60s on first run — give it 180s before warning.
 STIRLING_READY_ITERATIONS=90
 STIRLING_READY_INTERVAL=2
@@ -113,6 +113,20 @@ ensure_stirling_pdf() {
             RESTART_POLICY=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$STIRLING_NAME" 2>/dev/null || true)
             if [ "$RESTART_POLICY" != "unless-stopped" ]; then
                 docker update --restart unless-stopped "$STIRLING_NAME" >/dev/null
+            fi
+            # Apply memory limit retroactively if it has been bumped in this file since the
+            # container was created (docker reports memory in bytes; convert STIRLING_MEMORY's
+            # suffix-form for comparison). Skip silently if conversion isn't safe.
+            local CURRENT_MEMORY DESIRED_MEMORY_BYTES
+            CURRENT_MEMORY=$(docker inspect -f '{{.HostConfig.Memory}}' "$STIRLING_NAME" 2>/dev/null || echo 0)
+            case "$STIRLING_MEMORY" in
+                *g) DESIRED_MEMORY_BYTES=$(( ${STIRLING_MEMORY%g} * 1024 * 1024 * 1024 )) ;;
+                *m) DESIRED_MEMORY_BYTES=$(( ${STIRLING_MEMORY%m} * 1024 * 1024 )) ;;
+                *)  DESIRED_MEMORY_BYTES=0 ;;
+            esac
+            if [ "$DESIRED_MEMORY_BYTES" -gt 0 ] && [ "$CURRENT_MEMORY" != "$DESIRED_MEMORY_BYTES" ]; then
+                echo "Updating Stirling PDF memory limit to $STIRLING_MEMORY..."
+                docker update --memory "$STIRLING_MEMORY" --memory-swap "$STIRLING_MEMORY" "$STIRLING_NAME" >/dev/null
             fi
             if [ "$(docker inspect -f '{{.State.Running}}' "$STIRLING_NAME")" != "true" ]; then
                 echo "Starting Stirling PDF container..."

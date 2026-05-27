@@ -669,6 +669,7 @@ async def export_scan_csv(scan_url: str = ""):
     writer.writerow([
         "Document Title",
         "Short Summary",
+        "Category",
         "Document URL",
         "Filename",
         "Document Type",
@@ -682,6 +683,7 @@ async def export_scan_csv(scan_url: str = ""):
         writer.writerow([
             doc.get("title") or "<automated title extraction failed>",
             doc.get("short_summary") or "<automated summary extraction failed>",
+            doc.get("category") or "",
             doc.get("source_url") or "",
             doc.get("filename") or "",
             doc.get("file_type_label") or "",

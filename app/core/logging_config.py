@@ -40,9 +40,14 @@ def setup_logging(level: str = "INFO", log_dir: str = "logs") -> logging.Logger:
     root_logger.addHandler(console_handler)
     root_logger.addHandler(file_handler)
 
-    # Set levels for noisy libraries
+    # Set levels for noisy libraries. pymongo's SDAM monitor emits a DEBUG event
+    # every 10 seconds per server; httpx logs every HTTP request at INFO; both
+    # bury the actual app signal when LOG_LEVEL drops to DEBUG.
     logging.getLogger("aiohttp").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("pymongo").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     # Log startup message
     root_logger.info(f"Logging to file: {log_file}")

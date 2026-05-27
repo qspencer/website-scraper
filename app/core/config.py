@@ -6,7 +6,7 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "Document Scraper"
     DEBUG: bool = True  # Set to False in production
-    LOG_LEVEL: str = "DEBUG"  # DEBUG for development, INFO or WARNING for production
+    LOG_LEVEL: str = "INFO"  # DEBUG drowns everything in pymongo SDAM heartbeats; flip locally if needed
 
     # Scraping settings
     REQUEST_TIMEOUT: int = 30
