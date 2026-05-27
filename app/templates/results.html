@@ -506,6 +506,10 @@
 
 <script>
     const sessionId = '{{ session_id }}';
+    // Scan URL for this session (passed in by main.py). Used to fetch per-scan
+    // summarization progress so the modal shows "0/320 → 320/320" for THIS scan
+    // rather than "2533/2853" against the whole MongoDB corpus.
+    const scanUrl = '{{ scan_url|default("", true) }}';
     let allDocuments = [];
     let filteredDocuments = [];
     let selectedDocuments = new Set();
@@ -1951,29 +1955,39 @@
             if (pollBusy) { schedulePoll(); return; }
             pollBusy = true;
             try {
-                const resp = await fetch('/api/download/mongodb/summarization/status');
+                // Prefer scan-scoped progress when we know the scan URL. The scan
+                // endpoint returns {pending,complete,failed,skipped} directly; the
+                // global one wraps them under data.stats + has data.is_running.
+                const url = scanUrl
+                    ? `/api/download/mongodb/scan/summary-stats?scan_url=${encodeURIComponent(scanUrl)}`
+                    : '/api/download/mongodb/summarization/status';
+                const resp = await fetch(url);
                 const data = await resp.json();
                 consecutiveFailures = 0;
 
-                if (!data.is_running) {
+                const stats = scanUrl ? data : data.stats;
+                // For scan-scoped polling we infer "running" from pending>0; for
+                // global polling we use the explicit is_running flag.
+                const isRunning = scanUrl ? (stats.pending > 0) : data.is_running;
+
+                if (!isRunning) {
                     summarizationPollTimer = null;
 
                     // Update modal (if still open)
-                    showSummarizationComplete(data.stats);
+                    showSummarizationComplete(stats);
 
                     // Show toast if modal is closed
                     if (!isMongoOverlayVisible()) {
                         const parts = [];
-                        if (data.stats.complete > 0) parts.push(`${data.stats.complete} summarized`);
-                        if (data.stats.failed > 0) parts.push(`${data.stats.failed} failed`);
+                        if (stats.complete > 0) parts.push(`${stats.complete} summarized`);
+                        if (stats.failed > 0) parts.push(`${stats.failed} failed`);
                         showToast(parts.join(', '));
                     }
                     return; // done, no more polling
                 } else {
                     // Update with progress
-                    const s = data.stats;
-                    const done = s.complete + s.failed;
-                    const total = done + s.pending;
+                    const done = stats.complete + stats.failed;
+                    const total = done + stats.pending;
                     if (total > 0) {
                         document.getElementById('summarizationStatusText').textContent =
                             `AI summarization in progress... (${done}/${total})`;

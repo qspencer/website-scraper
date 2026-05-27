@@ -161,12 +161,20 @@ async def settings_page(request: Request):
 async def results_page(request: Request, session_id: str):
     """Results page showing found documents."""
     logger.debug(f"Serving results page for session {session_id}")
+    # Look up the scan_url so the page can show per-scan summarization progress
+    # instead of corpus-wide progress. Falls back to "" if the session has been
+    # swept (24h TTL) — the page still works, just with global polling.
+    scan_url = ""
+    scrape_session = session_store.scrape_sessions.get(session_id)
+    if scrape_session and scrape_session.get("request") is not None:
+        scan_url = str(scrape_session["request"].url)
     return templates.TemplateResponse(
         request,
         "results.html",
         {
             "title": f"Results - {settings.APP_NAME}",
             "session_id": session_id,
+            "scan_url": scan_url,
             "results_per_page": runtime_settings.results_per_page,
         },
     )
