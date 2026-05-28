@@ -13,6 +13,18 @@ import app.core.database as _db_module
 _db_module.DB_PATH = _tmp_db_path
 _db_module.init_database()
 
+# --- Redirect logging to a temp dir BEFORE app.main imports ---
+# app.main calls setup_logging() at import time. Patch the module attribute first
+# so the from-import in app.main binds to our temp-dir version — this keeps even
+# the import-time lines out of the real logs/scraper.log (closes R-TEST-5 fully).
+import tempfile as _tempfile
+import app.core.logging_config as _logcfg
+_tmp_log_dir = _tempfile.mkdtemp(prefix="scraper-test-logs-")
+_orig_setup = _logcfg.setup_logging
+def _temp_setup(level="INFO", log_dir="logs"):
+    return _orig_setup(level="WARNING", log_dir=_tmp_log_dir)
+_logcfg.setup_logging = _temp_setup
+
 from app.main import app
 
 

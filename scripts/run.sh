@@ -3,24 +3,27 @@ set -e
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--skip-tests] [-h|--help]
+Usage: $(basename "$0") [--skip-tests] [--force-install] [-h|--help]
 
 Bootstraps the venv, optionally runs the test suite as a launch gate, ensures the
 Stirling-PDF container is up, kills any prior uvicorn started by this script, and
 starts the app on http://127.0.0.1:8000.
 
 Options:
-  --skip-tests   Skip the pytest gate (useful for tight dev loops).
-  -h, --help     Show this message.
+  --skip-tests     Skip the pytest gate (useful for tight dev loops).
+  --force-install  Run pip install even if requirements.txt is unchanged.
+  -h, --help       Show this message.
 EOF
 }
 
 SKIP_TESTS=0
+FORCE_INSTALL=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --skip-tests) SKIP_TESTS=1; shift ;;
-        -h|--help)    usage; exit 0 ;;
-        *)            echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+        --skip-tests)    SKIP_TESTS=1; shift ;;
+        --force-install) FORCE_INSTALL=1; shift ;;
+        -h|--help)       usage; exit 0 ;;
+        *)               echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
 
@@ -182,12 +185,12 @@ source "$VENV_DIR/bin/activate"
 
 # --- Install dependencies ---
 # Skip when requirements.txt hasn't been touched since the venv was created — common in the
-# dev loop, and pip's no-op resolve still costs ~5s. Use --force-install to bypass.
+# dev loop, and pip's no-op resolve still costs ~5s. Pass --force-install to bypass the skip.
 
 VENV_MARKER="$VENV_DIR/pyvenv.cfg"
 REQS_FILE="$PROJECT_DIR/requirements.txt"
-if [ -f "$VENV_MARKER" ] && [ "$REQS_FILE" -ot "$VENV_MARKER" ]; then
-    echo "Dependencies up to date (requirements.txt older than venv)."
+if [ "$FORCE_INSTALL" -eq 0 ] && [ -f "$VENV_MARKER" ] && [ "$REQS_FILE" -ot "$VENV_MARKER" ]; then
+    echo "Dependencies up to date (requirements.txt older than venv; use --force-install to override)."
 else
     echo "Installing dependencies..."
     pip install -q -r "$REQS_FILE"
@@ -220,7 +223,25 @@ cleanup_old_process
 
 # --- Start the app in the background ---
 
-mkdir -p "$(dirname "$LOG_FILE")"
+LOG_DIR="$(dirname "$LOG_FILE")"
+mkdir -p "$LOG_DIR"
+
+# Cap uvicorn.log: unlike scraper.log (RotatingFileHandler), this file is only
+# shell-appended, so roll it to .1 once it passes 10MB to bound unbounded growth.
+UVICORN_LOG_MAX_BYTES=$((10 * 1024 * 1024))
+if [ -f "$LOG_FILE" ]; then
+    SIZE=$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)
+    if [ "$SIZE" -gt "$UVICORN_LOG_MAX_BYTES" ]; then
+        mv -f "$LOG_FILE" "$LOG_FILE.1"
+        echo "Rolled uvicorn.log ($SIZE bytes) to uvicorn.log.1"
+    fi
+fi
+
+# Prune orphaned rotated scraper logs above the handler's backupCount (3). Older
+# installs left scraper.log.4/.5 behind that the rotation will never reclaim.
+for f in "$LOG_DIR"/scraper.log.[4-9] "$LOG_DIR"/scraper.log.[1-9][0-9]; do
+    [ -f "$f" ] && rm -f "$f"
+done
 
 echo "Starting app..."
 # Append (>>) rather than truncate (>) so prior session's startup output and any crash trace survive.

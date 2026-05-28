@@ -247,6 +247,21 @@ a high-level grouping for orientation; the live `/docs` page is authoritative.
 | GET | `/api/download/mongodb/summarization/status` | Get summarization status and stats |
 | POST | `/api/download/mongodb/summarization/start` | Trigger summarization manually |
 | POST | `/api/download/mongodb/summarization/retry` | Retry failed summaries (all scans) |
+| DELETE | `/api/download/mongodb/scan` | Delete a scan and all its documents, categories, and history (cascade) |
+
+### Categorization
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/download/mongodb/categorize/start` | Start the iterative categorization pipeline for a scan |
+| GET | `/api/download/mongodb/categorize/progress/{id}` | SSE stream of pipeline progress (propose/assign/quality/final) |
+| POST | `/api/download/mongodb/categorize/accept/{id}` | Persist a completed categorization |
+| POST | `/api/download/mongodb/categorize/cancel/{id}` | Cancel a running pipeline |
+| GET | `/api/download/mongodb/categories` | Get the persisted category set + live counts for a scan |
+| PATCH | `/api/download/mongodb/categories` | Edit categories (rename / merge / delete) |
+| DELETE | `/api/download/mongodb/categories` | Drop the category set (documents become Uncategorized) |
+
+> The interactive OpenAPI schema at `http://localhost:8000/docs` is always authoritative; the tables above are a high-level grouping.
 
 ### Settings & History
 
@@ -274,7 +289,27 @@ pytest tests/ --cov=app --cov-report=term-missing
 ## Logging
 
 Logs are written to the `logs/` directory:
-- `scraper.log` - Main application log (rotates at 10MB, keeps 5 backups)
+- `scraper.log` - Main application log (rotates at 10MB, keeps 3 backups)
+- `uvicorn.log` - Server stdout/stderr (rolled by `scripts/run.sh` once it passes 10MB)
+
+## Backing Up Your Data
+
+Application data lives in two places:
+
+- **SQLite** (`scraper.db` at the repo root) — settings and scan history. Back up with a
+  simple file copy while the app is stopped (or use SQLite's online backup):
+  ```bash
+  cp scraper.db scraper.db.bak
+  ```
+- **MongoDB** — stored documents (GridFS), extracted text, AI summaries, and categories.
+  Back up and restore the database named in Settings (default `document_scraper`):
+  ```bash
+  mongodump   --db document_scraper --out ./mongo-backup
+  mongorestore --db document_scraper ./mongo-backup/document_scraper
+  ```
+
+Downloaded files saved to the local file system (default `./downloads`) are just regular
+files — copy the directory if you want to keep them.
 
 ## License
 

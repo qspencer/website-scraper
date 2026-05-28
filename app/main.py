@@ -26,6 +26,21 @@ SESSION_MAX_COUNT = 500                 # hard cap; oldest evicted past this
 SESSION_SWEEP_INTERVAL = 5 * 60         # 5 minutes
 
 
+def _evict_session(sessions: dict, sid: str) -> None:
+    """Delete a session, cancelling any still-running background task it owns.
+
+    Categorize sessions carry a `task` handle; evicting one mid-run (TTL or cap)
+    without cancelling would orphan a pipeline that keeps spending AI quota with
+    no consumer reading its queue.
+    """
+    s = sessions.get(sid)
+    if s is not None:
+        task = s.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+    del sessions[sid]
+
+
 def _sweep_session_dict(name: str, sessions: dict, now: float) -> int:
     """Evict expired sessions and enforce the count cap. Returns # removed."""
     removed = 0
@@ -33,14 +48,14 @@ def _sweep_session_dict(name: str, sessions: dict, now: float) -> int:
     expired = [sid for sid, s in sessions.items()
                if now - s.get("start_time", now) > SESSION_TTL_SECONDS]
     for sid in expired:
-        del sessions[sid]
+        _evict_session(sessions, sid)
         removed += 1
     # Hard cap: drop oldest first
     if len(sessions) > SESSION_MAX_COUNT:
         oldest = sorted(sessions.items(), key=lambda kv: kv[1].get("start_time", 0))
         overflow = len(sessions) - SESSION_MAX_COUNT
         for sid, _ in oldest[:overflow]:
-            del sessions[sid]
+            _evict_session(sessions, sid)
             removed += 1
     if removed:
         logger.info("Session sweep: removed %d expired/overflow entries from %s", removed, name)

@@ -187,5 +187,23 @@ Combines this re-eval's findings with carryovers from `EVALUATION_2026-05-19.md`
 | R-DOC-1 categorization undocumented | ✅ closed | README feature bullet + user-guide "Categorizing Documents" section |
 | R-DOC-2 scan-delete undocumented | ✅ closed | user-guide "Deleting a Scan" section + Clear-History relabel note |
 | R-DOC-5 architecture crawl-depth 2/5 | ✅ closed | corrected to 5/10 (completes prior 4.5/4.6) |
-| R-DOC-6 `.doc`/`.pptx` extraction list | ✅ closed (README) | README text-extraction list updated; architecture note still P2-open |
-| — remaining P2/P3 — | open | R-CODE-4/5, R-TEST-4/5/6/7, R-RUN-1/2/3, R-DOC-3/4/7, P3 cluster |
+| R-DOC-6 `.doc`/`.pptx` extraction list | ✅ closed | README + architecture extraction notes updated |
+
+**P2 cluster closed 2026-05-28** (same-day, after the P1s).
+
+| Finding | Status | Notes |
+|---|---|---|
+| R-CODE-4 evicted categorize tasks not cancelled | ✅ closed | `_evict_session` cancels a running task before deleting the session |
+| R-CODE-5 B110 regression (`_classify_office_zip`) | ✅ closed | narrowed to `(BadZipFile, OSError)` + debug log; bandit B110 back to 0 |
+| R-TEST-4 delete-scan test no teardown | ✅ closed | wrapped in try/finally with best-effort cascade cleanup |
+| R-TEST-5 conftest log pollution | ✅ closed | conftest re-runs `setup_logging` against a temp dir after import |
+| R-TEST-6 `.doc` real-payload untested | ✅ closed | integration test generates a real OLE `.doc` via LibreOffice → Stirling decode |
+| R-TEST-7 background_tasks untested | ✅ closed | new `tests/test_background_tasks.py` (track/discard, error-log, cancel_all) |
+| R-RUN-1 phantom `--force-install` | ✅ closed | flag implemented (forces pip install) |
+| R-RUN-2 uvicorn.log unbounded | ✅ closed | run.sh rolls it to `.1` past 10MB |
+| R-RUN-3 orphaned rotated logs | ✅ closed | run.sh prunes `scraper.log.[4-9]+` on startup; one-time cleanup done (~20MB) |
+| R-DOC-3 README API tables stale | ✅ closed | added Categorization table + delete-scan row + /docs pointer |
+| R-DOC-4 architecture components/diagram | ✅ closed | added AIClient, CategorizationService, SessionStore, format-detection notes |
+| R-DOC-7 no backup guidance | ✅ closed | README "Backing Up Your Data" (scraper.db copy + mongodump/restore) |
+
+**Remaining (P3 only):** R-CODE-6 (SSE single-consumer), R-CODE-7 (starlette CVE, fastapi-pinned), R-CODE-8 (ruff --fix), R-TEST-8 (coupling tests), R-RUN-4/5/6, R-DOC-8 (spec "Draft" header), R-DOC-9 (CLAUDE.md), R-DOC-10. Plus carryovers: categorization M7 polish, vision-LLM feature, F3.11/F3.12/F5.2/F5.4.

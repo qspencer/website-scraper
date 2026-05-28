@@ -183,10 +183,16 @@ Stores downloaded documents in MongoDB GridFS for later search and AI summarizat
 Extracts text from common document formats so it can be indexed and summarized:
 
 - PDF via PyPDF2 with Stirling-PDF OCR fallback (image-only PDFs)
-- DOCX via python-docx
+- DOCX via python-docx; legacy `.doc` via Stirling-PDF conversion (`_extract_doc`)
 - XLSX via openpyxl (also produces structured per-sheet metadata)
 - PPTX via python-pptx
 - Plain text and CSV directly
+
+Also performs **format detection / corruption handling**: `_validate_pdf_structure`
+fast-fails on truncated PDFs (`CorruptDocumentError`, not retried), and
+`_detect_actual_format` recognizes a file's real type by magic bytes so a file served
+with the wrong extension (e.g. an HTML page at a `.pdf` URL) is re-routed to the correct
+extractor and its metadata corrected (`extract_text_with_detection`).
 
 ### 7. StirlingPDFService (`app/services/stirling_pdf_service.py`)
 
@@ -203,6 +209,18 @@ Persists summary stats for every completed scan (URL, mode, depth, pages, doc co
 ### 10. BackgroundTasks (`app/services/background_tasks.py`)
 
 Tracks fire-and-forget asyncio tasks (notably the periodic session sweeper and async summarization triggers) with strong references so they aren't GC'd mid-flight. Cancelled cleanly during the FastAPI lifespan shutdown.
+
+### 11. AIClient (`app/services/ai_client.py`)
+
+Shared, provider-aware chat client (Anthropic vs OpenAI-compatible, auto-detected). Owns the HTTP plumbing, retry/backoff with `Retry-After` honoring, and URL redaction for user-facing error strings. Both the summarization and categorization services call it rather than talking to the AI endpoint directly.
+
+### 12. CategorizationService (`app/services/categorization_service.py`)
+
+Iterative document categorization driven by `AIClient`. Three phases per iteration — **propose** categories from a (deterministically sampled) set of document summaries, **assign** every document to one, and a rule-based **quality review** (singletons / mega-category / "Other" rate / imbalance) that triggers a refine-and-retry up to a cap. Has a token-budget guard and buckets unassignable documents into "Other".
+
+### 13. SessionStore (`app/services/session_store.py`)
+
+Module owning the three in-memory session dicts (`scrape_sessions`, `download_sessions`, `categorize_sessions`) so no route module imports another's state. Entries are pruned by the lifespan session-sweeper (TTL + count cap), which cancels any running categorize task before eviction.
 
 ## API Endpoints
 

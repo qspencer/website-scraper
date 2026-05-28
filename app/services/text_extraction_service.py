@@ -34,8 +34,9 @@ def _classify_office_zip(file_data: bytes) -> Optional[str]:
                 return ".xlsx"
             if "ppt/presentation.xml" in names:
                 return ".pptx"
-    except Exception:
-        pass
+    except (zipfile.BadZipFile, OSError) as e:
+        # Not a readable ZIP (truncated/corrupt) — treat as "not an Office file".
+        logger.debug(f"ZIP introspection failed during format detection: {e}")
     return None
 
 
