@@ -54,4 +54,6 @@ bandit -r app/         # B110 (try/except/pass) is tracked — keep at zero
 
 - `docs/architecture.md` — components, data flow, format detection.
 - `docs/user-guide.md` — end-user workflows (scan, download, summarize, categorize, delete scan).
+- `docs/manual-testing.md` — human-in-the-loop QA checklist for the live UI/SSE/Mongo/AI paths
+  the automated suite can't assert; run it before shipping changes to those flows.
 - `EVALUATION_2026-05-28.md` — latest evaluation; §9 is the living status/closure log.

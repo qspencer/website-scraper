@@ -101,7 +101,7 @@ def _validate_pdf_structure(file_data: bytes) -> Optional[str]:
     diagnostic string when they don't. Catches the two common corruption modes:
       - missing %PDF- magic header (file isn't a PDF at all)
       - missing %%EOF trailer in the last 1024 bytes (truncated download)
-    Real parsing problems still surface later in PyPDF2.
+    Real parsing problems still surface later in pypdf.
     """
     if len(file_data) < 32:
         return f"PDF file too small to be valid ({len(file_data)} bytes)"
@@ -215,13 +215,13 @@ def extract_text_with_detection(
 
 def _extract_pdf(file_data: bytes) -> str:
     """Extract text from a PDF file. Pre-validates structure to fail fast on
-    truncated or misidentified files (no point spending time in PyPDF2 / OCR on a
+    truncated or misidentified files (no point spending time in pypdf / OCR on a
     file that's missing its trailer)."""
     diagnostic = _validate_pdf_structure(file_data)
     if diagnostic:
         raise CorruptDocumentError(diagnostic)
 
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(file_data))
     pages = []

@@ -200,8 +200,22 @@ REQS_FILE="$PROJECT_DIR/requirements.txt"
 if [ "$FORCE_INSTALL" -eq 0 ] && [ -f "$VENV_MARKER" ] && [ "$REQS_FILE" -ot "$VENV_MARKER" ]; then
     echo "Dependencies up to date (requirements.txt older than venv; use --force-install to override)."
 else
-    echo "Installing dependencies..."
-    pip install -q -r "$REQS_FILE"
+    # Run pip in the background and emit a heartbeat dot every few seconds. A bare
+    # `pip install -q` is silent for a minute+ on a cold venv and looks hung; the dots
+    # (same idea as the Stirling wait below) prove progress while keeping output quiet.
+    echo -n "Installing dependencies (first run can take a minute)"
+    pip install -q -r "$REQS_FILE" &
+    PIP_PID=$!
+    while kill -0 "$PIP_PID" 2>/dev/null; do
+        echo -n "."
+        sleep 3
+    done
+    if wait "$PIP_PID"; then
+        echo " done."
+    else
+        echo " failed — see pip output above." >&2
+        exit 1
+    fi
     touch "$VENV_MARKER"
 fi
 

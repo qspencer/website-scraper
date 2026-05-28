@@ -129,7 +129,7 @@ def extract_text_via_ocr(file_data: bytes) -> Optional[str]:
     """OCR a PDF and extract text from the result.
 
     Sends the PDF through Stirling PDF OCR, then extracts text
-    from the resulting searchable PDF using PyPDF2.
+    from the resulting searchable PDF using pypdf.
 
     Returns extracted text, or None on failure.
     """
@@ -138,7 +138,7 @@ def extract_text_via_ocr(file_data: bytes) -> Optional[str]:
         return None
 
     try:
-        from PyPDF2 import PdfReader
+        from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(ocr_result))
         pages = []
         for page in reader.pages:
@@ -167,7 +167,7 @@ def convert_to_pdf(file_data: bytes, filename: str) -> Optional[bytes]:
     (Stirling unavailable, conversion failed, unsupported source format).
 
     The returned PDF can then be fed through the normal PDF text-extraction chain
-    (PyPDF2 → Stirling OCR fallback) to recover the text.
+    (pypdf → Stirling OCR fallback) to recover the text.
     """
     url = runtime_settings.stirling_pdf_url
     if not url:
