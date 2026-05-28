@@ -246,8 +246,8 @@ Static defaults are defined in Pydantic settings:
 |---------|---------|-------------|
 | `REQUEST_TIMEOUT` | 30s | HTTP request timeout |
 | `MAX_CONCURRENT_REQUESTS` | 10 | Connection pool limit |
-| `DEFAULT_CRAWL_DEPTH` | 2 | Default depth for "follow links" |
-| `MAX_CRAWL_DEPTH` | 5 | Maximum allowed crawl depth |
+| `DEFAULT_CRAWL_DEPTH` | 5 | Default depth for "follow links" |
+| `MAX_CRAWL_DEPTH` | 10 | Maximum allowed crawl depth |
 | `MAX_PAGES_TO_SCAN` | 500 | Pages per scan batch (continuation available) |
 | `REQUESTS_PER_SECOND` | 2.0 | Rate limiting for polite crawling |
 | `MAX_FILE_SIZE_MB` | 100 | Maximum file size to download |

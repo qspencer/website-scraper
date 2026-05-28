@@ -12,9 +12,11 @@ This guide walks you through every feature of the Document Scraper application. 
 4. [Downloading Documents](#downloading-documents)
 5. [Storing Documents in MongoDB](#storing-documents-in-mongodb)
 6. [Browsing Stored Documents](#browsing-stored-documents)
-7. [Scan History](#scan-history)
-8. [Settings](#settings)
-9. [Troubleshooting](#troubleshooting)
+7. [Categorizing Documents](#categorizing-documents)
+8. [Scan History](#scan-history)
+9. [Deleting a Scan](#deleting-a-scan)
+10. [Settings](#settings)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -231,7 +233,49 @@ Results show the document title (from AI summary if available, otherwise the fil
 
 ### Exporting
 
-The **Export to CSV** button (next to the search button) downloads a CSV of every document in the currently-selected scan, including filename, source URL, file size, extracted-text length, summary, short summary, keywords, document type, and timestamps. Useful for sharing scan results outside the app.
+The **Export to CSV** button (next to the search button) downloads a CSV of every document in the currently-selected scan, including the document title, short summary, **category**, source URL, filename, document type, and version. Useful for sharing scan results outside the app.
+
+---
+
+## Categorizing Documents
+
+Once a scan has enough summarized documents, the app can group them into topical **categories** that it discovers from the document summaries — you don't pick the categories, the AI proposes them based on what's actually in the collection.
+
+### Starting categorization
+
+On the **Documents** page, with a scan selected, the **Categorize** button appears in the summarization bar. It's available when:
+
+- An AI service is configured in Settings, **and**
+- At least **10 documents** in the scan have completed summaries.
+
+If fewer than 10 are summarized, the button is disabled and its tooltip tells you how many more you need. (Categorization works from summaries, so summarize first.)
+
+### How it works (the iteration loop)
+
+Click **Categorize** to open a progress window. The app runs an iterative process, which you'll watch in real time:
+
+1. **Propose** — it reads the document summaries and proposes a set of 5–15 categories.
+2. **Assign** — it sorts every document into the best-fitting category (or "Other" if nothing fits).
+3. **Quality check** — it looks at the distribution. If the result is lopsided (one giant bucket, several single-document categories, or too many "Other"), it refines the categories and tries again.
+
+It repeats up to three times, then shows you the final result as a bar chart of categories and their document counts. If it couldn't reach a balanced split (some corpora are genuinely dominated by one topic), it shows the best attempt with a note explaining the issue — you can still accept it.
+
+### Accepting or discarding
+
+- **Accept** saves the categories. Each document gets a category badge, a row of clickable **category chips** appears, and you can filter the document list by clicking a chip (or a badge).
+- **Discard** throws the result away and changes nothing.
+
+### Editing categories afterward
+
+Click the **✎ Edit** affordance on the categories bar to:
+
+- **Rename** a category,
+- **Merge** one category into another (the source's documents move to the target),
+- **Delete** a category (its documents become "Uncategorized" — the rest of the set stays),
+- **Re-run** the whole categorization from scratch (replaces the current set),
+- **Drop all** categories (removes the set entirely; all documents become Uncategorized).
+
+Documents added to a scan *after* categorization show up under the **Uncategorized** chip until you re-run.
 
 ---
 
@@ -253,7 +297,22 @@ Click **History** in the top navigation to see a record of all your past scans. 
 
 Click any row to see the full details of that scan in a popup window.
 
-To clear all history, click the red **Clear History** button and confirm.
+The red **Clear History List** button removes the *history entries* shown here. **It does not delete the documents stored in MongoDB** — for that, use Delete Scan (below).
+
+---
+
+## Deleting a Scan
+
+Deleting a scan is a **permanent, cascading** action: it removes the scan's stored documents, their extracted text and AI summaries, any categories, and the scan-history entry — everything associated with that scan's URL. It cannot be undone.
+
+There are two places to do it:
+
+- **History page** — each row has a 🗑 trash icon at the end. Click it, confirm, and that scan is fully removed. The confirmation dialog tells you how many documents will be deleted.
+- **Documents page** — with a scan selected, the **🗑 Delete scan** button sits next to the scan dropdown. Same effect.
+
+If a scan is currently being scanned, downloaded, or categorized, deletion is refused until that operation finishes (you'll see a message telling you to wait). This prevents deleting data out from under an in-progress job.
+
+> **Tip:** if you've scanned the same site more than once under slightly different URLs (e.g. `example.com` vs `www.example.com`), they're stored as separate scans. Delete the one you don't want to consolidate.
 
 ---
 

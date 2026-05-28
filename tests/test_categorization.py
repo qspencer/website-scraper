@@ -53,6 +53,26 @@ class TestSeededSample:
         b = cs._seeded_sample(items, 50, seed_key="https://example.com/scan-1")
         assert a == b
 
+    def test_deterministic_across_processes(self):
+        """R-CODE-2: the sample must be reproducible across process restarts, not just
+        within one process. Builtin hash() is salted by PYTHONHASHSEED, so we run the
+        sample in a fresh interpreter with a DIFFERENT hash seed and require a match."""
+        import subprocess
+        import sys
+        code = (
+            "from app.services.categorization_service import _seeded_sample;"
+            "print(_seeded_sample(list(range(500)), 50, seed_key='https://example.com/scan-1'))"
+        )
+        in_process = str(cs._seeded_sample(list(range(500)), 50, seed_key="https://example.com/scan-1"))
+        out = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd="/home/ubuntu/Dev/website-scraper",
+            env={"PYTHONHASHSEED": "12345", "PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True,
+        )
+        assert out.returncode == 0, f"subprocess failed: {out.stderr}"
+        assert out.stdout.strip() == in_process, "sample differs across processes (hash() leaked back in?)"
+
     def test_different_seed_different_sample(self):
         items = list(range(500))
         a = cs._seeded_sample(items, 50, seed_key="scan-A")
@@ -166,6 +186,20 @@ class TestParseAssignmentsJSON:
         raw = json.dumps({"assignments": [{"id": "d1", "category": "Other"}]})
         result = cs._parse_assignments_json(raw, expected_ids=["d1"], valid_names=["A"])
         assert result == {"d1": "Other"}
+
+    def test_hallucinated_id_is_dropped(self):
+        """R-CODE-1: ids the model invents (not in expected_ids) must NOT survive —
+        otherwise a non-ObjectId id later crashes the accept_categorization bulk write."""
+        raw = json.dumps({"assignments": [
+            {"id": "d1", "category": "A"},
+            {"id": "doc-3", "category": "A"},          # hallucinated, not in expected_ids
+            {"id": "deadbeef", "category": "B"},       # also not expected
+        ]})
+        result = cs._parse_assignments_json(raw, expected_ids=["d1", "d2"], valid_names=["A", "B"])
+        # Only the two expected ids appear; the hallucinated ones are gone.
+        assert set(result.keys()) == {"d1", "d2"}
+        assert result["d1"] == "A"
+        assert result["d2"] == "Other"  # omitted by model → bucketed
 
 
 # --- Quality evaluation ----------------------------------------------------

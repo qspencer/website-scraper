@@ -1028,24 +1028,36 @@ def set_document_category(doc_id: str, category: Optional[str]) -> bool:
     return result.matched_count > 0
 
 
-def bulk_set_document_categories(assignments: Dict[str, str]) -> int:
+def bulk_set_document_categories(assignments: Dict[str, str], scan_url: Optional[str] = None) -> int:
     """Assign categories to many documents at once. ``assignments`` is {doc_id: category}.
+
+    When ``scan_url`` is provided, each update is scoped to that scan so a doc id
+    belonging to a different scan can never be categorized cross-scan. Malformed
+    ids are skipped individually (defense in depth) rather than aborting the batch.
 
     Returns the number of documents updated. Uses pymongo bulk_write for efficiency.
     """
     if not assignments:
         return 0
     from bson import ObjectId
+    from bson.errors import InvalidId
     from pymongo import UpdateOne
 
     now = datetime.now(timezone.utc)
-    ops = [
-        UpdateOne(
-            {"_id": ObjectId(doc_id)},
-            {"$set": {"category": category, "categorized_at": now}},
-        )
-        for doc_id, category in assignments.items()
-    ]
+    ops = []
+    for doc_id, category in assignments.items():
+        try:
+            oid = ObjectId(doc_id)
+        except (InvalidId, TypeError):
+            logger.warning(f"Skipping invalid document id in categorization: {doc_id!r}")
+            continue
+        filt: Dict[str, Any] = {"_id": oid}
+        if scan_url is not None:
+            filt["scan_url"] = scan_url
+        ops.append(UpdateOne(filt, {"$set": {"category": category, "categorized_at": now}}))
+
+    if not ops:
+        return 0
     result = _get_collection().bulk_write(ops, ordered=False)
     logger.info(f"Bulk-categorized {result.modified_count} documents")
     return result.modified_count
@@ -1127,7 +1139,7 @@ def accept_categorization(
         doc_count_at_creation=len(assignments),
     )
     clear_document_categories(scan_url)
-    bulk_set_document_categories(assignments)
+    bulk_set_document_categories(assignments, scan_url=scan_url)
     _refresh_category_set_counts(scan_url)
     return set_id
 

@@ -21,6 +21,7 @@ only.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import random
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -137,14 +138,18 @@ def _check_token_budget(label: str, prompt: str) -> None:
 
 
 def _seeded_sample(items: List[Any], n: int, seed_key: str) -> List[Any]:
-    """Deterministically sample n items using a hash of seed_key as the RNG seed.
+    """Deterministically sample n items using a stable hash of seed_key as the RNG seed.
 
-    Re-running with the same seed_key returns the same sample, which is what
-    refinement iterations want: the model sees a consistent corpus snapshot.
+    Uses hashlib (not the builtin hash(), which is salted per-process by
+    PYTHONHASHSEED) so the same seed_key yields the same sample *across process
+    restarts*. Refinement iterations rely on this: the model must see a consistent
+    corpus snapshot, and a categorize re-run on the same scan should be reproducible.
     """
     if len(items) <= n:
         return list(items)
-    rng = random.Random(hash(seed_key) & 0xFFFFFFFF)
+    digest = hashlib.sha256(seed_key.encode("utf-8")).digest()
+    seed = int.from_bytes(digest[:8], "big")
+    rng = random.Random(seed)
     return rng.sample(items, n)
 
 
@@ -216,13 +221,19 @@ def _parse_assignments_json(raw: str, expected_ids: List[str], valid_names: List
     valid = {n.casefold(): n for n in valid_names}
     valid["other"] = "Other"
 
+    # Only ids the caller actually sent are valid targets. The model can hallucinate
+    # or echo malformed ids (e.g. "doc-3", a truncated ObjectId); if those reached
+    # the downstream bulk-write, ObjectId() would raise and abort the entire
+    # accept_categorization — after the UI already showed "final". Restrict to the
+    # known set so a stray id can never poison the persist step.
+    expected_set = set(expected_ids)
     by_id: Dict[str, str] = {}
     for entry in data.get("assignments", []):
         if not isinstance(entry, dict):
             continue
         doc_id = str(entry.get("id", "")).strip()
         cat = str(entry.get("category", "")).strip()
-        if not doc_id:
+        if doc_id not in expected_set:
             continue
         canonical = valid.get(cat.casefold(), "Other")
         by_id[doc_id] = canonical

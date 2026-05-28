@@ -12,9 +12,12 @@ A web application that scans websites for downloadable documents, displays a pre
   - PDFs Only
 - **Real-time Progress**: Live updates via Server-Sent Events during scanning and downloading
 - **Batch Downloads**: Select files and download to a local directory or store in MongoDB
-- **MongoDB Storage**: Store documents in MongoDB with GridFS, automatic text extraction (PDF, DOCX, XLSX, TXT), and full-text search
+- **MongoDB Storage**: Store documents in MongoDB with GridFS, automatic text extraction (PDF, DOC, DOCX, XLSX, PPTX, TXT), and full-text search
 - **AI Summarization**: Background summarization of stored documents via a configurable AI API (Anthropic, OpenAI, or any compatible endpoint)
+- **AI Categorization**: Group a scan's documents into emergent categories derived from their summaries, with an iterative refine loop, editable categories (rename / merge / delete), and per-category filtering
+- **Format Auto-Detection**: Files served with the wrong extension (e.g. an HTML page at a `.pdf` URL, or a legacy `.doc`) are detected by content and re-routed to the correct extractor; corrupt files are flagged rather than retried
 - **Scan History**: Browse and review past scans with detailed statistics
+- **Scan Deletion**: Permanently remove a scan and all its stored documents, summaries, categories, and history in one action
 - **Retry Failed Items**: Retry inaccessible pages and documents after a scan completes
 - **URL Validation**: Friendly error messages for invalid or malformed URLs
 - **File Size Detection**: Displays file sizes with option to calculate unknown sizes

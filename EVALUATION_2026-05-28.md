@@ -174,8 +174,18 @@ Combines this re-eval's findings with carryovers from `EVALUATION_2026-05-19.md`
 
 ## 9. Progress Status (living — update as findings close)
 
-_Nothing closed yet; this section will track remediation the way the 2026-05-19 doc's §8 did._
+**P1 cluster closed 2026-05-28** (same-day remediation).
 
-| Finding | Status | Closed in |
+| Finding | Status | Notes |
 |---|---|---|
-| (all open) | — | — |
+| R-CODE-1 accept-categorization crash on bad id | ✅ closed | `_parse_assignments_json` filters to `expected_ids`; regression test `test_hallucinated_id_is_dropped` |
+| R-CODE-3 bulk_set cross-scan scoping | ✅ closed | `bulk_set_document_categories(scan_url=…)` + per-op `ObjectId` guard |
+| R-CODE-2 seeded-sample non-determinism | ✅ closed | hashlib-derived seed; verified identical across `PYTHONHASHSEED=1` vs `999` |
+| R-TEST-3 cross-process determinism test | ✅ closed | `test_deterministic_across_processes` (subprocess w/ forced hash seed) |
+| R-TEST-1 ai_client retry loop untested | ✅ closed | new `tests/test_ai_client.py` (16 tests incl. retry/backoff/Retry-After/exhaustion) |
+| R-TEST-2 reclassification persistence untested | ✅ closed | `tests/integration/test_reclassification_roundtrip.py` (2 live tests) |
+| R-DOC-1 categorization undocumented | ✅ closed | README feature bullet + user-guide "Categorizing Documents" section |
+| R-DOC-2 scan-delete undocumented | ✅ closed | user-guide "Deleting a Scan" section + Clear-History relabel note |
+| R-DOC-5 architecture crawl-depth 2/5 | ✅ closed | corrected to 5/10 (completes prior 4.5/4.6) |
+| R-DOC-6 `.doc`/`.pptx` extraction list | ✅ closed (README) | README text-extraction list updated; architecture note still P2-open |
+| — remaining P2/P3 — | open | R-CODE-4/5, R-TEST-4/5/6/7, R-RUN-1/2/3, R-DOC-3/4/7, P3 cluster |
