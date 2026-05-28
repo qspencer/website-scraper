@@ -1,8 +1,6 @@
-import asyncio
 import json
 import time
 import uuid
-from typing import Dict
 
 from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
@@ -19,7 +17,6 @@ from app.services.scraper_service import scraper_service
 from app.services.history_service import save_scan
 from app.services.settings_service import runtime_settings
 from app.utils.file_utils import format_file_size
-from app.schemas.document import DocumentInfo
 
 logger = get_logger(__name__)
 

@@ -8,7 +8,7 @@ import os
 import time
 
 from app.core.config import settings
-from app.core.constants import DocumentTypeFilter, CrawlDepthOption, FILTER_DISPLAY_NAMES
+from app.core.constants import DocumentTypeFilter, FILTER_DISPLAY_NAMES
 from app.core.logging_config import setup_logging, get_logger
 from app.api.routes import scraper, downloads, settings as settings_routes, history, categorize
 from app.services import background_tasks, session_store

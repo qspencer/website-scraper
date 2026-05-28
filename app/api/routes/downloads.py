@@ -5,9 +5,8 @@ import io
 import json
 import time
 import uuid
-from typing import Dict, List
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -18,7 +17,6 @@ from app.schemas.scrape import (
     PathValidationRequest,
     PathValidationResponse,
 )
-from app.schemas.document import DocumentInfo
 from app.services.download_service import download_service
 from app.services import mongodb_service
 from app.services import ai_summarization_service
@@ -776,7 +774,7 @@ async def export_scan_csv(scan_url: str = ""):
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="document_export.csv"'},
+        headers={"Content-Disposition": 'attachment; filename="document_export.csv"'},
     )
 
 

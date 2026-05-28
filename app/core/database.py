@@ -3,7 +3,7 @@
 import sqlite3
 import json
 import os
-from typing import Any, Optional, Dict
+from typing import Any, Dict
 from contextlib import contextmanager
 
 from app.core.logging_config import get_logger

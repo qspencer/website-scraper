@@ -2,7 +2,6 @@ import logging
 import os
 import sys
 from logging.handlers import RotatingFileHandler
-from typing import Optional
 
 
 def setup_logging(level: str = "INFO", log_dir: str = "logs") -> logging.Logger:

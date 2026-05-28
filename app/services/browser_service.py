@@ -1,6 +1,6 @@
 import asyncio
 from typing import Optional, Tuple
-from playwright.async_api import async_playwright, Browser, Page
+from playwright.async_api import async_playwright, Browser
 
 from app.core.config import settings
 from app.core.logging_config import get_logger

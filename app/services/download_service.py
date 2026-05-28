@@ -53,7 +53,6 @@ class DownloadService:
                     logger.warning(f"Download failed: {url} (HTTP {response.status})")
                     return False, f"HTTP {response.status}", None
 
-                total_size = response.headers.get("Content-Length")
                 downloaded = 0
 
                 async with aiofiles.open(filepath, "wb") as f:

@@ -98,7 +98,7 @@ cleanup_old_process() {
 
 ensure_stirling_pdf() {
     if ! command -v docker &>/dev/null; then
-        echo "WARNING: Docker not found — Stirling PDF (OCR) will not be available."
+        echo "WARNING: Docker not found — Stirling PDF will not be available (OCR and legacy .doc extraction disabled)."
         return
     fi
 
@@ -144,7 +144,9 @@ ensure_stirling_pdf() {
         echo "Creating Stirling PDF container..."
         # --restart unless-stopped keeps the container up across host reboots; user can still
         # docker stop it explicitly when they want it down.
-        docker run -d \
+        # Guard against set -e: a failed create (port $STIRLING_PORT taken, image pull failure)
+        # must not abort app launch — Stirling is optional, like the Docker-absent path above.
+        if ! docker run -d \
             --name "$STIRLING_NAME" \
             --restart unless-stopped \
             --cpus "$STIRLING_CPUS" \
@@ -152,7 +154,13 @@ ensure_stirling_pdf() {
             --memory-swap "$STIRLING_MEMORY" \
             -p "$STIRLING_PORT:8080" \
             -e SECURITY_ENABLELOGIN=false \
-            "$STIRLING_IMAGE"
+            "$STIRLING_IMAGE"; then
+            echo "WARNING: failed to start Stirling PDF (port $STIRLING_PORT in use, or image pull failed)." >&2
+            echo "         OCR and legacy .doc extraction will be unavailable; the app will still start." >&2
+            echo "         Inspect with: docker logs $STIRLING_NAME" >&2
+            docker rm -f "$STIRLING_NAME" >/dev/null 2>&1 || true
+            return
+        fi
     fi
 
     if curl -sf "http://localhost:$STIRLING_PORT/api/v1/info/status" >/dev/null 2>&1; then
@@ -169,7 +177,7 @@ ensure_stirling_pdf() {
         echo -n "."
         sleep "$STIRLING_READY_INTERVAL"
     done
-    echo " WARNING: Stirling PDF did not become ready within ${READY_SECONDS}s (OCR may not work)."
+    echo " WARNING: Stirling PDF did not become ready within ${READY_SECONDS}s (OCR and legacy .doc extraction may not work)."
 }
 
 # --- Create virtual environment if needed ---

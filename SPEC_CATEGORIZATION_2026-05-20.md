@@ -2,7 +2,8 @@
 
 **Author:** Q. Spencer (with Claude Opus 4.7)
 **Date:** 2026-05-20
-**Status:** Draft — open questions in §13 should be answered before implementation
+**Status:** Implemented (M1–M6 shipped). M7 polish outstanding. Open questions in §13 were
+resolved during implementation; see §9 of `EVALUATION_2026-05-28.md` for verification.
 **Related:** existing AI summarization (`app/services/ai_summarization_service.py`),
 Documents page (`app/templates/documents.html`)
 

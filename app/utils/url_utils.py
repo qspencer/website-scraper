@@ -1,5 +1,5 @@
 from urllib.parse import urlparse, urljoin, urldefrag, parse_qs, urlencode, urlunparse, unquote
-from typing import Optional, Tuple, Set
+from typing import Optional
 import re
 
 

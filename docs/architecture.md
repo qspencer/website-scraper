@@ -397,7 +397,7 @@ Potential enhancements for production use:
 3. **Queue system**: Use Celery for background task processing
 4. **Robots.txt**: Respect robots.txt directives
 5. **Proxy support**: Add configurable proxy settings
-6. **Export options**: Export document list to CSV/JSON
+6. **JSON export**: Export document list to JSON (CSV export is already implemented — `GET /api/download/mongodb/export/csv`)
 7. **Scheduling**: Add scheduled/recurring scans
 8. **App container image**: Add a Dockerfile for the app itself (Stirling-PDF already runs in a container; the app does not)
 9. **Custom headers**: Allow users to specify custom HTTP headers

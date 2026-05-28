@@ -206,4 +206,21 @@ Combines this re-eval's findings with carryovers from `EVALUATION_2026-05-19.md`
 | R-DOC-4 architecture components/diagram | ✅ closed | added AIClient, CategorizationService, SessionStore, format-detection notes |
 | R-DOC-7 no backup guidance | ✅ closed | README "Backing Up Your Data" (scraper.db copy + mongodump/restore) |
 
-**Remaining (P3 only):** R-CODE-6 (SSE single-consumer), R-CODE-7 (starlette CVE, fastapi-pinned), R-CODE-8 (ruff --fix), R-TEST-8 (coupling tests), R-RUN-4/5/6, R-DOC-8 (spec "Draft" header), R-DOC-9 (CLAUDE.md), R-DOC-10. Plus carryovers: categorization M7 polish, vision-LLM feature, F3.11/F3.12/F5.2/F5.4.
+**P3 cluster closed 2026-05-28** (same-day, after the P2s).
+
+| Finding | Status | Notes |
+|---|---|---|
+| R-CODE-7 starlette CVE PYSEC-2026-161 | ✅ closed | fastapi requires only `starlette>=0.46.0` (no upper cap — eval's "fastapi-pinned" assumption was wrong); bumped to 1.2.0, pinned `starlette>=1.0.1` in requirements.txt; full + integration suites green |
+| R-CODE-8 ruff (28 issues) | ✅ closed | `ruff check app/ --fix` cleared 25 F401 + 1 F541 + `get_domain` cascade; 2 F841 unused vars removed by hand after verifying not dead-code-masking-a-bug; ruff now clean |
+| R-RUN-4 docker run aborts under set -e | ✅ closed | `docker run` guarded with `if ! …; then WARN; rm -f; return; fi` — a failed Stirling create no longer gates app start |
+| R-RUN-5 `.doc` degradation note | ✅ closed | Docker-missing / not-ready warnings now name legacy `.doc` extraction alongside OCR |
+| R-DOC-8 spec "Draft" header | ✅ closed | header → "Implemented (M1–M6); M7 polish outstanding" |
+| R-DOC-9 CLAUDE.md absent | ✅ closed | added (run/test/lint commands, stack summary, doc pointers) |
+| R-DOC-10 Future-Improvements lists shipped CSV | ✅ closed | item 6 narrowed to JSON export; cites shipped `GET /api/download/mongodb/export/csv` |
+
+**Accepted as-is (won't-fix, rationale recorded):**
+- **R-CODE-6** (SSE single-consumer) — a 2nd concurrent subscriber to the same categorize session cannot occur in single-user localhost use; guarding adds complexity for no real-world benefit.
+- **R-TEST-8** (coupling tests) — the tests pass and live round-trips already cover the behavior; rewriting passing tests is churn. Revisit only if a pymongo refactor actually breaks them.
+- **R-RUN-6** (`scraper.db` hardcoded path) — fine at current scale (20 KB / 7 rows); folded into carryover F3.12 (config-driven `DATABASE_PATH`).
+
+**Remaining:** carryovers only — categorization M7 polish, vision-LLM feature (`SPEC_VISION_2026-05-26.md`, M1–M7 unimplemented), F3.11 (requirements-dev split), F3.12 (config-driven DATABASE_PATH, subsumes R-RUN-6), F5.2 (re-open past scan), F5.4 (commit-message convention). All re-eval findings (P1/P2/P3) are now closed or explicitly accepted.

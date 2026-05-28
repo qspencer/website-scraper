@@ -24,7 +24,7 @@ import asyncio
 import hashlib
 import json
 import random
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from app.core.logging_config import get_logger
 from app.services import ai_client, mongodb_service

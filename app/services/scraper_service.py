@@ -2,8 +2,7 @@ import asyncio
 import os
 import aiohttp
 from bs4 import BeautifulSoup
-from typing import List, Optional, Set, Tuple
-from urllib.parse import urljoin
+from typing import List, Optional, Tuple
 
 from app.core.config import settings
 from app.core.constants import DocumentTypeFilter, FILTER_EXTENSIONS

@@ -1,8 +1,8 @@
 """API routes for application settings."""
 
 import re
-from typing import Dict, Any, Optional
-from pydantic import BaseModel, Field
+from typing import Optional
+from pydantic import BaseModel
 
 from fastapi import APIRouter
 

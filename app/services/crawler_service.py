@@ -1,8 +1,7 @@
 import asyncio
 from collections import deque
 from dataclasses import dataclass
-from typing import AsyncGenerator, Callable, Dict, List, Optional, Set, Tuple
-import time
+from typing import AsyncGenerator, List, Optional, Set, Tuple
 
 from app.core.constants import DocumentTypeFilter, CrawlDepthOption
 from app.core.logging_config import get_logger
@@ -11,8 +10,8 @@ from app.schemas.scrape import ScrapeProgress, ScrapeResult
 from app.services.scraper_service import scraper_service, clear_inaccessible_log_cache
 from app.services.settings_service import runtime_settings
 from app.utils.url_utils import (
-    get_domain, is_internal_link, normalize_url,
-    normalize_url_for_crawl, should_skip_url, get_filename_from_url
+    is_internal_link, normalize_url,
+    normalize_url_for_crawl, should_skip_url
 )
 
 logger = get_logger(__name__)
@@ -171,7 +170,6 @@ class CrawlerService:
             )
             return
 
-        base_domain = get_domain(start_url)
         effective_max_depth = 0 if crawl_option == CrawlDepthOption.SINGLE_PAGE else max_depth
         max_pages_per_batch = runtime_settings.max_pages_per_scan
         pages_this_batch = 0
